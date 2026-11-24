@@ -1,0 +1,943 @@
+{
+  "entities": {
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Authorized News Hub 24+ agency administrator record used for RBAC checks.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the administrator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified administrator email address.",
+          "minLength": 5,
+          "maxLength": 160
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin"],
+          "description": "Fixed RBAC role."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when admin access was granted."
+        }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    },
+    "FrontPageUpdate": {
+      "title": "FrontPageUpdate",
+      "description": "Published front-page news dispatch stored in the News Hub 24+ Firestore updates database.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable slug or dispatch identifier.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "description": "Headline of the front-page dispatch.",
+          "minLength": 4,
+          "maxLength": 240
+        },
+        "deck": {
+          "type": "string",
+          "description": "Editorial summary / sub-headline.",
+          "minLength": 4,
+          "maxLength": 800
+        },
+        "body": {
+          "type": "string",
+          "description": "Full dispatch body or excerpt.",
+          "minLength": 4,
+          "maxLength": 20000
+        },
+        "category": {
+          "type": "string",
+          "description": "Editorial desk or category.",
+          "minLength": 2,
+          "maxLength": 64
+        },
+        "author": {
+          "type": "string",
+          "description": "Byline author name.",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "authorUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the publisher.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "imageUrl": {
+          "type": "string",
+          "description": "Optional cover image URL or relative path.",
+          "maxLength": 512
+        },
+        "source": {
+          "type": "string",
+          "description": "Source attribution string.",
+          "maxLength": 160
+        },
+        "url": {
+          "type": "string",
+          "description": "Canonical permalink URL.",
+          "maxLength": 512
+        },
+        "tags": {
+          "type": "array",
+          "description": "Bounded editorial topic tags (1 to 10 tags)."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["published", "breaking", "archived"],
+          "description": "Editorial publication status."
+        },
+        "publishedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO publication timestamp string."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server last-updated timestamp."
+        }
+      },
+      "required": ["id", "title", "deck", "category", "author", "authorUid", "tags", "status", "publishedAt", "createdAt", "updatedAt"]
+    },
+    "SeoSettings": {
+      "title": "SeoSettings",
+      "description": "Global dynamic SEO meta tag configuration for News Hub 24+.",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Global HTML document title.",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "description": {
+          "type": "string",
+          "description": "Global meta description and OpenGraph description.",
+          "minLength": 10,
+          "maxLength": 400
+        },
+        "news_keywords": {
+          "type": "string",
+          "description": "Comma-separated Google News keywords meta tag.",
+          "minLength": 2,
+          "maxLength": 400
+        },
+        "author": {
+          "type": "string",
+          "description": "Global meta author tag.",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "ogTitle": {
+          "type": "string",
+          "description": "Optional OpenGraph title override.",
+          "maxLength": 160
+        },
+        "ogDescription": {
+          "type": "string",
+          "description": "Optional OpenGraph description override.",
+          "maxLength": 400
+        },
+        "canonicalUrl": {
+          "type": "string",
+          "description": "Optional canonical agency domain URL.",
+          "maxLength": 300
+        },
+        "updatedByUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the administrator who last updated SEO settings.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server update timestamp."
+        }
+      },
+      "required": ["title", "description", "news_keywords", "author", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "GhanaPayAccount": {
+      "title": "GhanaPayAccount",
+      "description": "Authenticated user GhanaPay and Mobile Money wallet profile (strictly owner-isolated PII).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Owner Firebase Auth UID matching document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ghanaPayId": {
+          "type": "string",
+          "description": "Registered GhanaPay wallet identifier or alias.",
+          "minLength": 4,
+          "maxLength": 64
+        },
+        "momoNumber": {
+          "type": "string",
+          "description": "Ghana mobile money MSISDN (e.g. 0557711975).",
+          "minLength": 9,
+          "maxLength": 20
+        },
+        "network": {
+          "type": "string",
+          "enum": ["MTN", "TELECEL", "AT", "GHANAPAY"],
+          "description": "Primary Ghana mobile money or GhanaPay rail."
+        },
+        "accountName": {
+          "type": "string",
+          "description": "Account holder full name.",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Owner verified email address.",
+          "minLength": 5,
+          "maxLength": 160
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "suspended"],
+          "description": "Wallet connection status."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server update timestamp."
+        }
+      },
+      "required": ["uid", "ghanaPayId", "momoNumber", "network", "accountName", "email", "status", "createdAt", "updatedAt"]
+    },
+    "TransactionLog": {
+      "title": "TransactionLog",
+      "description": "Immutable GhanaPay / MTN MoMo / Third-Party payment and receipt audit record.",
+      "type": "object",
+      "properties": {
+        "txRef": {
+          "type": "string",
+          "description": "Unique GhanaPay / GhIPSS transaction reference.",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "receiptNumber": {
+          "type": "string",
+          "description": "Compliant GhanaPay receipt number.",
+          "minLength": 4,
+          "maxLength": 64
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the initiating GhanaPay user.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "payerEmail": {
+          "type": "string",
+          "format": "email",
+          "description": "Payer email address.",
+          "minLength": 5,
+          "maxLength": 160
+        },
+        "payerPhone": {
+          "type": "string",
+          "description": "Payer Ghana mobile number.",
+          "minLength": 9,
+          "maxLength": 20
+        },
+        "paymentScope": {
+          "type": "string",
+          "enum": ["merchant", "third_party"],
+          "description": "Whether paying News Hub 24+ merchant account or a third-party GhanaPay/MoMo recipient."
+        },
+        "recipientPhone": {
+          "type": "string",
+          "description": "Beneficiary Ghana MoMo or GhanaPay phone number.",
+          "minLength": 9,
+          "maxLength": 20
+        },
+        "recipientName": {
+          "type": "string",
+          "description": "Beneficiary full name or agency label.",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "network": {
+          "type": "string",
+          "enum": ["MTN", "TELECEL", "AT", "GHANAPAY", "GHIPSS_BANK"],
+          "description": "Settlement rail used."
+        },
+        "itemName": {
+          "type": "string",
+          "description": "Product, membership, or third-party payment description.",
+          "minLength": 2,
+          "maxLength": 200
+        },
+        "amountGhs": {
+          "type": "number",
+          "description": "Transaction amount in Ghana Cedis (GHS)."
+        },
+        "feeGhs": {
+          "type": "number",
+          "description": "GhIPSS / GhanaPay processing fee in GHS."
+        },
+        "totalGhs": {
+          "type": "number",
+          "description": "Total debited amount in GHS."
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["GHS"],
+          "description": "Fixed Ghana Cedi currency code."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "completed", "failed", "reversed"],
+          "description": "Terminal or pending transaction settlement status."
+        },
+        "settlementMode": {
+          "type": "string",
+          "enum": ["live_ghanapay_api", "verified_ghanapay_ledger"],
+          "description": "Explicit indicator of live API vs verified ledger settlement mode."
+        },
+        "settlementMessage": {
+          "type": "string",
+          "description": "Human-readable compliance or settlement status message.",
+          "maxLength": 300
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server update timestamp."
+        }
+      },
+      "required": [
+        "txRef",
+        "receiptNumber",
+        "ownerUid",
+        "payerEmail",
+        "payerPhone",
+        "paymentScope",
+        "recipientPhone",
+        "recipientName",
+        "network",
+        "itemName",
+        "amountGhs",
+        "feeGhs",
+        "totalGhs",
+        "currency",
+        "status",
+        "settlementMode",
+        "settlementMessage",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CreatorNotification": {
+      "title": "CreatorNotification",
+      "description": "Real-time creator alert for daily revenue milestones, verified settlements, and processed withdrawal requests.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique notification identifier.",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the creator/admin receiving the alert.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["daily_verified_milestone", "daily_total_milestone", "withdrawal_processed", "verified_settlement"],
+          "description": "Category of creator notification."
+        },
+        "title": {
+          "type": "string",
+          "description": "Concise alert headline.",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "message": {
+          "type": "string",
+          "description": "Detailed alert summary including amounts and references.",
+          "minLength": 4,
+          "maxLength": 400
+        },
+        "metricDate": {
+          "type": "string",
+          "description": "UTC calendar date YYYY-MM-DD.",
+          "minLength": 10,
+          "maxLength": 20
+        },
+        "actualAmountUsd": {
+          "type": "number",
+          "description": "Current revenue or withdrawal USD amount."
+        },
+        "thresholdUsd": {
+          "type": "number",
+          "description": "Configured milestone USD threshold (optional for withdrawals)."
+        },
+        "verifiedRealFunds": {
+          "type": "boolean",
+          "description": "True only when backed by verified external payment/payout rails."
+        },
+        "referenceId": {
+          "type": "string",
+          "description": "Optional withdrawal or gateway transaction reference.",
+          "maxLength": 128
+        },
+        "read": {
+          "type": "boolean",
+          "description": "Whether the creator has acknowledged the notification."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server last-updated timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "type",
+        "title",
+        "message",
+        "metricDate",
+        "actualAmountUsd",
+        "verifiedRealFunds",
+        "read",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CustomerKycProfile": {
+      "title": "CustomerKycProfile",
+      "description": "Owner-isolated customer background KYC identity and source-of-funds record.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique KYC profile identifier.",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the profile owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fullName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "email": { "type": "string", "format": "email", "minLength": 5, "maxLength": 160 },
+        "phone": { "type": "string", "minLength": 7, "maxLength": 24 },
+        "nationality": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "countryOfResidence": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "continent": {
+          "type": "string",
+          "enum": ["Africa", "Europe", "North America", "Asia & Middle East"]
+        },
+        "dateOfBirth": { "type": "string", "minLength": 8, "maxLength": 20 },
+        "idType": {
+          "type": "string",
+          "enum": ["national_id", "passport", "drivers_license", "voters_id"]
+        },
+        "idNumberMasked": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "residentialAddress": { "type": "string", "minLength": 4, "maxLength": 200 },
+        "city": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "occupation": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "sourceOfFunds": {
+          "type": "string",
+          "enum": ["salary", "business_revenue", "creator_payouts", "remittance_family", "savings"]
+        },
+        "purposeOfTransaction": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "verificationTier": {
+          "type": "string",
+          "enum": ["basic", "standard", "enhanced"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["verified", "pending_review"]
+        },
+        "dailyLimitUsd": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "fullName",
+        "email",
+        "phone",
+        "nationality",
+        "countryOfResidence",
+        "continent",
+        "dateOfBirth",
+        "idType",
+        "idNumberMasked",
+        "residentialAddress",
+        "city",
+        "occupation",
+        "sourceOfFunds",
+        "purposeOfTransaction",
+        "verificationTier",
+        "status",
+        "dailyLimitUsd",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "RemittanceTransfer": {
+      "title": "RemittanceTransfer",
+      "description": "Owner-isolated Western Union-style cross-border remittance record with distinct continent corridor fees.",
+      "type": "object",
+      "properties": {
+        "mtcn": {
+          "type": "string",
+          "description": "Unique Money Transfer Control Number matching document ID.",
+          "minLength": 6,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "customerKycId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "senderName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "senderEmail": { "type": "string", "format": "email", "minLength": 5, "maxLength": 160 },
+        "senderPhone": { "type": "string", "minLength": 7, "maxLength": 24 },
+        "senderCountry": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "senderContinent": {
+          "type": "string",
+          "enum": ["Africa", "Europe", "North America", "Asia & Middle East"]
+        },
+        "senderCurrency": { "type": "string", "minLength": 3, "maxLength": 8 },
+        "recipientName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "recipientPhone": { "type": "string", "minLength": 7, "maxLength": 24 },
+        "recipientCountry": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "recipientContinent": {
+          "type": "string",
+          "enum": ["Africa", "Europe", "North America", "Asia & Middle East"]
+        },
+        "recipientCurrency": { "type": "string", "minLength": 3, "maxLength": 8 },
+        "corridorId": {
+          "type": "string",
+          "enum": [
+            "africa_domestic",
+            "intra_africa",
+            "africa_europe",
+            "africa_north_america",
+            "africa_asia_mena",
+            "intercontinental_global"
+          ]
+        },
+        "corridorLabel": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "payoutMethod": {
+          "type": "string",
+          "enum": ["mobile_money", "bank_deposit", "cash_pickup", "newshub_wallet", "ussd_789"]
+        },
+        "paymentRail": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "sendAmountUsd": { "type": "number" },
+        "totalFeeUsd": { "type": "number" },
+        "totalChargedUsd": { "type": "number" },
+        "receiveAmountLocal": { "type": "number" },
+        "pickupCode": { "type": "string", "minLength": 4, "maxLength": 32 },
+        "status": {
+          "type": "string",
+          "enum": ["Ready for Pickup", "In Transit", "Collected / Settled", "Reversed"]
+        },
+        "settlementMode": {
+          "type": "string",
+          "enum": ["live_gateway", "verified_corridor_ledger", "ussd_789"]
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "mtcn",
+        "ownerUid",
+        "customerKycId",
+        "senderName",
+        "senderEmail",
+        "senderPhone",
+        "senderCountry",
+        "senderContinent",
+        "senderCurrency",
+        "recipientName",
+        "recipientPhone",
+        "recipientCountry",
+        "recipientContinent",
+        "recipientCurrency",
+        "corridorId",
+        "corridorLabel",
+        "payoutMethod",
+        "paymentRail",
+        "sendAmountUsd",
+        "totalFeeUsd",
+        "totalChargedUsd",
+        "receiveAmountLocal",
+        "pickupCode",
+        "status",
+        "settlementMode",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AirtimeOrder": {
+      "title": "AirtimeOrder",
+      "description": "Owner-isolated universal global airtime purchase and settlement receipt.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "buyerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "buyerEmail": { "type": "string", "format": "email", "minLength": 5, "maxLength": 160 },
+        "recipientPhone": { "type": "string", "minLength": 7, "maxLength": 24 },
+        "countryCode": { "type": "string", "minLength": 2, "maxLength": 8 },
+        "countryName": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "continent": {
+          "type": "string",
+          "enum": ["Africa", "Europe", "North America", "Asia & Middle East"]
+        },
+        "carrier": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "amountUsd": { "type": "number" },
+        "feeUsd": { "type": "number" },
+        "totalChargedUsd": { "type": "number" },
+        "localCurrency": { "type": "string", "minLength": 3, "maxLength": 8 },
+        "localTopupAmount": { "type": "number" },
+        "paymentRail": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "channel": { "type": "string", "enum": ["web", "ussd_789"] },
+        "status": { "type": "string", "enum": ["Delivered", "Reversed"] },
+        "providerRef": { "type": "string", "minLength": 4, "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "buyerName",
+        "buyerEmail",
+        "recipientPhone",
+        "countryCode",
+        "countryName",
+        "continent",
+        "carrier",
+        "amountUsd",
+        "feeUsd",
+        "totalChargedUsd",
+        "localCurrency",
+        "localTopupAmount",
+        "paymentRail",
+        "channel",
+        "status",
+        "providerRef",
+        "createdAt"
+      ]
+    },
+    "UssdReceipt": {
+      "title": "UssdReceipt",
+      "description": "Owner-isolated *789# universal shortcode USSD payment receipt.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "shortcode": { "type": "string", "minLength": 4, "maxLength": 16 },
+        "msisdn": { "type": "string", "minLength": 7, "maxLength": 24 },
+        "service": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "amountUsd": { "type": "number" },
+        "feeUsd": { "type": "number" },
+        "amountGhs": { "type": "number" },
+        "reference": { "type": "string", "minLength": 4, "maxLength": 64 },
+        "summary": { "type": "string", "minLength": 4, "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "shortcode",
+        "msisdn",
+        "service",
+        "amountUsd",
+        "feeUsd",
+        "amountGhs",
+        "reference",
+        "summary",
+        "createdAt"
+      ]
+    },
+    "CommunityFollower": {
+      "title": "CommunityFollower",
+      "description": "Public community follower profile without PII (zero email or phone fields).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "handle": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "country": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "continent": {
+          "type": "string",
+          "enum": ["Africa", "Europe", "North America", "Asia & Middle East"]
+        },
+        "preferredDesks": {
+          "type": "array",
+          "description": "Bounded list of 1 to 6 followed news desks."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["following", "paused"]
+        },
+        "verifiedMember": { "type": "boolean" },
+        "joinedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "displayName",
+        "handle",
+        "country",
+        "continent",
+        "preferredDesks",
+        "status",
+        "verifiedMember",
+        "joinedAt",
+        "updatedAt"
+      ]
+    },
+    "PostReaction": {
+      "title": "PostReaction",
+      "description": "Verified reader reaction on a published news story across platforms.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "articleId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "reactionType": {
+          "type": "string",
+          "enum": ["insightful", "support", "celebrate", "curious", "shareworthy"]
+        },
+        "sourcePlatform": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "reactorLabel": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "articleId",
+        "reactionType",
+        "sourcePlatform",
+        "reactorLabel",
+        "createdAt"
+      ]
+    },
+    "CrossPlatformSyndication": {
+      "title": "CrossPlatformSyndication",
+      "description": "Cross-platform story syndication receipt published by verified News Hub 24+ admins.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "articleId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "articleTitle": { "type": "string", "minLength": 4, "maxLength": 240 },
+        "category": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "platforms": {
+          "type": "array",
+          "description": "Bounded list of 1 to 10 target distribution platforms."
+        },
+        "canonicalUrl": { "type": "string", "minLength": 8, "maxLength": 400 },
+        "summaryNote": { "type": "string", "minLength": 4, "maxLength": 300 },
+        "status": {
+          "type": "string",
+          "enum": ["published", "partial"]
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "articleId",
+        "articleTitle",
+        "category",
+        "platforms",
+        "canonicalUrl",
+        "summaryNote",
+        "status",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Admin role assignment documents."
+    },
+    "/frontpage_updates/{updateId}": {
+      "schema": { "$ref": "#/entities/FrontPageUpdate" },
+      "description": "Public front-page news updates and editorial dispatches persisted in Firestore."
+    },
+    "/seo_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/SeoSettings" },
+      "description": "Global dynamic SEO meta tags configuration (e.g. /seo_settings/global)."
+    },
+    "/ghanapay_accounts/{userId}": {
+      "schema": { "$ref": "#/entities/GhanaPayAccount" },
+      "description": "Owner-isolated GhanaPay and MTN MoMo login profiles."
+    },
+    "/transaction_logs/{txId}": {
+      "schema": { "$ref": "#/entities/TransactionLog" },
+      "description": "Owner-isolated compliant GhanaPay and third-party MoMo transaction audit logs."
+    },
+    "/creator_notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/CreatorNotification" },
+      "description": "Owner-isolated creator milestone and withdrawal notification records."
+    },
+    "/customer_kyc_profiles/{profileId}": {
+      "schema": { "$ref": "#/entities/CustomerKycProfile" },
+      "description": "Owner-isolated customer background KYC verification profiles."
+    },
+    "/remittance_transfers/{mtcn}": {
+      "schema": { "$ref": "#/entities/RemittanceTransfer" },
+      "description": "Owner-isolated Western Union cross-border remittance transfers."
+    },
+    "/airtime_orders/{orderId}": {
+      "schema": { "$ref": "#/entities/AirtimeOrder" },
+      "description": "Owner-isolated universal global airtime purchase orders."
+    },
+    "/ussd_receipts/{receiptId}": {
+      "schema": { "$ref": "#/entities/UssdReceipt" },
+      "description": "Owner-isolated *789# universal shortcode USSD receipts."
+    },
+    "/community_followers/{followerId}": {
+      "schema": { "$ref": "#/entities/CommunityFollower" },
+      "description": "Public community follower handles and followed news desks (zero PII)."
+    },
+    "/post_reactions/{reactionId}": {
+      "schema": { "$ref": "#/entities/PostReaction" },
+      "description": "Public verified reactions on published news stories."
+    },
+    "/cross_platform_syndications/{syndicationId}": {
+      "schema": { "$ref": "#/entities/CrossPlatformSyndication" },
+      "description": "Public cross-platform story distribution receipts created by verified admins."
+    }
+  }
+}

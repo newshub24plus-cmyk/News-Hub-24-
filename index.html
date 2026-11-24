@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>News Hub 24+ (newshub24plus.com) – Official News Agency, Wire &amp; Android APK</title>
+    <meta
+      name="description"
+      content="newshub24plus.com is the official standalone .com website of News Hub 24+ global news and media agency, featuring 24/7 reporting, video monetization, and Android APK download."
+    />
+    <meta
+      name="robots"
+      content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
+    />
+    <meta
+      name="googlebot"
+      content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
+    />
+    <meta name="bingbot" content="index, follow" />
+    <meta
+      name="news_keywords"
+      content="newshub24plus.com, News Hub 24+, official website, Base44 app, global news, breaking news, media agency, investigative journalism, Android APK"
+    />
+    <meta name="author" content="News Hub 24+ Editorial Desk (newshub24plus.com)" />
+    <meta name="theme-color" content="#FBF9F5" />
+
+    <!-- OpenGraph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="News Hub 24+ (newshub24plus.com)" />
+    <meta
+      property="og:title"
+      content="News Hub 24+ (newshub24plus.com) – Official News Agency, Wire &amp; Android APK"
+    />
+    <meta
+      property="og:description"
+      content="newshub24plus.com is the official standalone .com website of News Hub 24+ global news and media agency, linked to the Base44 app with 24/7 reporting and APK download."
+    />
+
+    <!-- Twitter / X Cards -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="News Hub 24+ (newshub24plus.com) – Official News Agency, Wire &amp; Android APK"
+    />
+    <meta
+      name="twitter:description"
+      content="newshub24plus.com is the official standalone .com website of News Hub 24+ global news and media agency, linked to the Base44 app with 24/7 reporting and APK download."
+    />
+
+    <!-- Search Engine Discovery & Syndication Links -->
+    <link rel="alternate" type="application/rss+xml" title="News Hub 24+ (newshub24plus.com) Wire RSS" href="/rss.xml" />
+    <link rel="sitemap" type="application/xml" title="Sitemap Index" href="/sitemap_index.xml" />
+    <link rel="sitemap" type="application/xml" title="Sitemap" href="/sitemap.xml" />
+    <link rel="search" type="application/opensearchdescription+xml" title="newshub24plus.com Search" href="/opensearch.xml" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- Editorial Typography (Playfair Display + Plus Jakarta Sans + JetBrains Mono) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,400;1,600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Schema.org Structured Data: NewsMediaOrganization (newshub24plus.com) -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "NewsMediaOrganization",
+        "name": "News Hub 24+",
+        "alternateName": ["newshub24plus.com", "News Hub 24+.com", "NewsHub24+"],
+        "url": "https://www.newshub24plus.com",
+        "description": "Official standalone .com website of News Hub 24+ (newshub24plus.com), an independent global news and media agency linked to the News Hub 24+ Base44 application.",
+        "email": "newshub24plus@gmail.com",
+        "sameAs": [
+          "https://www.newshub24plus.com",
+          "https://newshub24plus.com",
+          "https://base44.com"
+        ],
+        "publishingPrinciples": "https://www.newshub24plus.com/#agency",
+        "diversityStaffingReport": "https://www.newshub24plus.com/#agency",
+        "correctionsPolicy": "https://www.newshub24plus.com/#agency"
+      }
+    </script>
+
+    <!-- Schema.org Structured Data: WebSite SearchAction -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "News Hub 24+ (newshub24plus.com)",
+        "alternateName": "News Hub 24+",
+        "url": "https://www.newshub24plus.com",
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": "https://www.newshub24plus.com/?q={search_term_string}",
+          "query-input": "required name=search_term_string"
+        }
+      }
+    </script>
+
+    <!-- Schema.org Structured Data: Android APK SoftwareApplication -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "News Hub 24+ Mobile Reader",
+        "url": "https://www.newshub24plus.com",
+        "operatingSystem": "Android 8.0+",
+        "applicationCategory": "NewsApplication",
+        "softwareVersion": "2.4.0",
+        "downloadUrl": "https://www.newshub24plus.com/downloads/NewsHub24Plus-v2.4.0.apk",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
+    <!-- Initialize Theme Before Paint -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('nh24-theme');
+          var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          if (stored === 'dark' || (!stored && prefersDark)) {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-[#FBF9F5] dark:bg-[#0D0D0C] text-[#141413] dark:text-[#F5F3EE] antialiased selection:bg-[#991B1B]/15 dark:selection:bg-[#EF4444]/25 selection:text-[#7F1D1D] dark:selection:text-[#FCA5A5] transition-colors duration-150">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

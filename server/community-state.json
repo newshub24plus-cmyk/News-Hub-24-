@@ -1,0 +1,333 @@
+{
+  "followers": [
+    {
+      "id": "FLW-WNW6D-EE",
+      "ownerUid": "reader",
+      "displayName": "Kofi Mensah",
+      "handle": "@kofimensah_gh",
+      "country": "Ghana",
+      "continent": "Africa",
+      "preferredDesks": [
+        "World",
+        "Economy"
+      ],
+      "status": "following",
+      "verifiedMember": false,
+      "joinedAt": "2026-11-19T02:02:43.237Z",
+      "updatedAt": "2026-11-19T02:02:43.237Z"
+    }
+  ],
+  "comments": [
+    {
+      "id": "CMT-WNW6L-FF",
+      "articleId": "nh24-001",
+      "articleTitle": "Geneva Accord Establishes Binding Cross-Border Digital Trade and Tariff Framework",
+      "authorName": "Kofi Mensah",
+      "authorHandle": "@kofimensah",
+      "country": "Accra, Ghana",
+      "body": "Clear reporting on cross-border maritime corridors and renewable financing.",
+      "helpfulCount": 2,
+      "moderationStatus": "approved_healthy",
+      "createdAt": "2026-11-19T02:02:43.245Z"
+    }
+  ],
+  "moderatedBlockedCount": 1,
+  "reactionsByArticle": {
+    "nh24-001": {
+      "insightful": 5,
+      "support": 2,
+      "celebrate": 2,
+      "curious": 0,
+      "shareworthy": 0,
+      "total": 9,
+      "lastReactedAt": "2026-11-19T02:03:11.775Z"
+    }
+  },
+  "reactionEvents": [
+    {
+      "id": "RCT-OI733-WJ",
+      "articleId": "nh24-001",
+      "articleTitle": "Geneva Accord Establishes Binding Cross-Border Digital Trade and Tariff Framework",
+      "reactionType": "insightful",
+      "sourcePlatform": "youtube",
+      "sourcePlatformLabel": "YouTube",
+      "reactorLabel": "YouTube Community Reader",
+      "ownerUid": "community",
+      "createdAt": "2026-11-19T02:03:11.775Z"
+    },
+    {
+      "id": "RCT-OI732-9X",
+      "articleId": "nh24-001",
+      "articleTitle": "Geneva Accord Establishes Binding Cross-Border Digital Trade and Tariff Framework",
+      "reactionType": "celebrate",
+      "sourcePlatform": "meta_instagram",
+      "sourcePlatformLabel": "Instagram",
+      "reactorLabel": "Instagram Community Reader",
+      "ownerUid": "community",
+      "createdAt": "2026-11-19T02:03:11.775Z"
+    },
+    {
+      "id": "RCT-OI731-HY",
+      "articleId": "nh24-001",
+      "articleTitle": "Geneva Accord Establishes Binding Cross-Border Digital Trade and Tariff Framework",
+      "reactionType": "support",
+      "sourcePlatform": "meta_facebook",
+      "sourcePlatformLabel": "Facebook",
+      "reactorLabel": "Facebook Community Reader",
+      "ownerUid": "community",
+      "createdAt": "2026-11-19T02:03:11.775Z"
+    },
+    {
+      "id": "RCT-OI730-36",
+      "articleId": "nh24-001",
+      "articleTitle": "Geneva Accord Establishes Binding Cross-Border Digital Trade and Tariff Framework",
+      "reactionType": "insightful",
+      "sourcePlatform": "website",
+      "sourcePlatformLabel": "Website",
+      "reactorLabel": "Website Community Reader",
+      "ownerUid": "community",
+      "createdAt": "2026-11-19T02:03:11.775Z"
+    },
+    {
+      "id": "RCT-WOI6W-OB",
+      "articleId": "nh24-001",
+      "articleTitle": "Geneva Accord Establishes Binding Cross-Border Digital Trade and Tariff Framework",
+      "reactionType": "insightful",
+      "sourcePlatform": "meta_facebook",
+      "sourcePlatformLabel": "Facebook",
+      "reactorLabel": "Verified News Hub Reader",
+      "ownerUid": "reader",
+      "createdAt": "2026-11-19T02:03:11.768Z"
+    },
+    {
+      "id": "RCT-NW743-O1",
+      "articleId": "nh24-001",
+      "articleTitle": "Geneva Accord Establishes Binding Cross-Border Digital Trade and Tariff Framework",
+      "reactionType": "insightful",
+      "sourcePlatform": "youtube",
+      "sourcePlatformLabel": "YouTube",
+      "reactorLabel": "YouTube Community Reader",
+      "ownerUid": "community",
+      "createdAt": "2026-11-19T02:02:43.264Z"
+    },
+    {
+      "id": "RCT-NW742-UC",
+      "articleId": "nh24-001",
+      "articleTitle": "Geneva Accord Establishes Binding Cross-Border Digital Trade and Tariff Framework",
+      "reactionType": "celebrate",
+      "sourcePlatform": "meta_instagram",
+      "sourcePlatformLabel": "Instagram",
+      "reactorLabel": "Instagram Community Reader",
+      "ownerUid": "community",
+      "createdAt": "2026-11-19T02:02:43.264Z"
+    },
+    {
+      "id": "RCT-NW741-GD",
+      "articleId": "nh24-001",
+      "articleTitle": "Geneva Accord Establishes Binding Cross-Border Digital Trade and Tariff Framework",
+      "reactionType": "support",
+      "sourcePlatform": "meta_facebook",
+      "sourcePlatformLabel": "Facebook",
+      "reactorLabel": "Facebook Community Reader",
+      "ownerUid": "community",
+      "createdAt": "2026-11-19T02:02:43.264Z"
+    },
+    {
+      "id": "RCT-NW740-5V",
+      "articleId": "nh24-001",
+      "articleTitle": "Geneva Accord Establishes Binding Cross-Border Digital Trade and Tariff Framework",
+      "reactionType": "insightful",
+      "sourcePlatform": "website",
+      "sourcePlatformLabel": "Website",
+      "reactorLabel": "Website Community Reader",
+      "ownerUid": "community",
+      "createdAt": "2026-11-19T02:02:43.264Z"
+    }
+  ],
+  "syndications": [
+    {
+      "id": "SYN-WOTGF-JO",
+      "ownerUid": "creator",
+      "articleId": "nh24-pub-mwmwotg8",
+      "articleSlug": "accra-continental-renewable-grid-dispatch-launches-across-west-afric-otg8",
+      "articleTitle": "Accra Continental Renewable Grid Dispatch Launches Across West Africa",
+      "category": "Technology",
+      "platforms": [
+        "website",
+        "base44_app",
+        "meta_facebook",
+        "youtube"
+      ],
+      "deliveryResults": [
+        {
+          "platform": "website",
+          "platformLabel": "News Hub 24+ Website & RSS",
+          "deliveryMode": "canonical_utm_feed",
+          "status": "Published",
+          "trackedUrl": "https://ais-dev-qu7wretydoetjwztwauaud-827871246101.europe-west2.run.app/?story=accra-continental-renewable-grid-dispatch-launches-across-west-afric-otg8&utm_source=website&utm_medium=cross_publish&utm_campaign=nh24-pub-mwmwotg8",
+          "detail": "Live on News Hub 24+ front page, RSS XML feed & Google News Sitemap."
+        },
+        {
+          "platform": "base44_app",
+          "platformLabel": "Base44 Official App",
+          "deliveryMode": "canonical_utm_feed",
+          "status": "Published",
+          "trackedUrl": "https://ais-dev-qu7wretydoetjwztwauaud-827871246101.europe-west2.run.app/?story=accra-continental-renewable-grid-dispatch-launches-across-west-afric-otg8&utm_source=base44_app&utm_medium=cross_publish&utm_campaign=nh24-pub-mwmwotg8",
+          "detail": "Published to Base44 App syndication feed with verified UTM attribution link."
+        },
+        {
+          "platform": "meta_facebook",
+          "platformLabel": "Meta Facebook Page",
+          "deliveryMode": "canonical_utm_feed",
+          "status": "Published",
+          "trackedUrl": "https://ais-dev-qu7wretydoetjwztwauaud-827871246101.europe-west2.run.app/?story=accra-continental-renewable-grid-dispatch-launches-across-west-afric-otg8&utm_source=facebook&utm_medium=cross_publish&utm_campaign=nh24-pub-mwmwotg8",
+          "detail": "Published to Facebook syndication feed with verified UTM attribution link."
+        },
+        {
+          "platform": "youtube",
+          "platformLabel": "YouTube Community & Video Hub",
+          "deliveryMode": "canonical_utm_feed",
+          "status": "Published",
+          "trackedUrl": "https://ais-dev-qu7wretydoetjwztwauaud-827871246101.europe-west2.run.app/?story=accra-continental-renewable-grid-dispatch-launches-across-west-afric-otg8&utm_source=youtube&utm_medium=cross_publish&utm_campaign=nh24-pub-mwmwotg8",
+          "detail": "Published to YouTube syndication feed with verified UTM attribution link."
+        }
+      ],
+      "canonicalUrl": "https://ais-dev-qu7wretydoetjwztwauaud-827871246101.europe-west2.run.app/?story=accra-continental-renewable-grid-dispatch-launches-across-west-afric-otg8",
+      "summaryNote": "Published across 4 connected platform(s).",
+      "status": "published",
+      "createdAt": "2026-11-19T02:03:26.360Z"
+    },
+    {
+      "id": "SYN-WOI7F-FL",
+      "ownerUid": "creator",
+      "articleId": "nh24-001",
+      "articleSlug": "geneva-accord-digital-trade-tariff-framework",
+      "articleTitle": "Geneva Accord Establishes Binding Cross-Border Digital Trade and Tariff Framework",
+      "category": "World",
+      "platforms": [
+        "website",
+        "android_apk",
+        "base44_app",
+        "meta_facebook",
+        "meta_instagram",
+        "youtube"
+      ],
+      "deliveryResults": [
+        {
+          "platform": "website",
+          "platformLabel": "News Hub 24+ Website & RSS",
+          "deliveryMode": "canonical_utm_feed",
+          "status": "Published",
+          "trackedUrl": "https://ais-dev-qu7wretydoetjwztwauaud-827871246101.europe-west2.run.app/?story=geneva-accord-digital-trade-tariff-framework&utm_source=website&utm_medium=cross_publish&utm_campaign=nh24-001",
+          "detail": "Live on News Hub 24+ front page, RSS XML feed & Google News Sitemap."
+        },
+        {
+          "platform": "android_apk",
+          "platformLabel": "Android APK Feed",
+          "deliveryMode": "canonical_utm_feed",
+          "status": "Published",
+          "trackedUrl": "https://ais-dev-qu7wretydoetjwztwauaud-827871246101.europe-west2.run.app/?story=geneva-accord-digital-trade-tariff-framework&utm_source=android_apk&utm_medium=cross_publish&utm_campaign=nh24-001",
+          "detail": "Published to Android APK syndication feed with verified UTM attribution link."
+        },
+        {
+          "platform": "base44_app",
+          "platformLabel": "Base44 Official App",
+          "deliveryMode": "canonical_utm_feed",
+          "status": "Published",
+          "trackedUrl": "https://ais-dev-qu7wretydoetjwztwauaud-827871246101.europe-west2.run.app/?story=geneva-accord-digital-trade-tariff-framework&utm_source=base44_app&utm_medium=cross_publish&utm_campaign=nh24-001",
+          "detail": "Published to Base44 App syndication feed with verified UTM attribution link."
+        },
+        {
+          "platform": "meta_facebook",
+          "platformLabel": "Meta Facebook Page",
+          "deliveryMode": "canonical_utm_feed",
+          "status": "Published",
+          "trackedUrl": "https://ais-dev-qu7wretydoetjwztwauaud-827871246101.europe-west2.run.app/?story=geneva-accord-digital-trade-tariff-framework&utm_source=facebook&utm_medium=cross_publish&utm_campaign=nh24-001",
+          "detail": "Published to Facebook syndication feed with verified UTM attribution link."
+        },
+        {
+          "platform": "meta_instagram",
+          "platformLabel": "Meta Instagram Feed",
+          "deliveryMode": "canonical_utm_feed",
+          "status": "Published",
+          "trackedUrl": "https://ais-dev-qu7wretydoetjwztwauaud-827871246101.europe-west2.run.app/?story=geneva-accord-digital-trade-tariff-framework&utm_source=instagram&utm_medium=cross_publish&utm_campaign=nh24-001",
+          "detail": "Published to Instagram syndication feed with verified UTM attribution link."
+        },
+        {
+          "platform": "youtube",
+          "platformLabel": "YouTube Community & Video Hub",
+          "deliveryMode": "canonical_utm_feed",
+          "status": "Published",
+          "trackedUrl": "https://ais-dev-qu7wretydoetjwztwauaud-827871246101.europe-west2.run.app/?story=geneva-accord-digital-trade-tariff-framework&utm_source=youtube&utm_medium=cross_publish&utm_campaign=nh24-001",
+          "detail": "Published to YouTube syndication feed with verified UTM attribution link."
+        }
+      ],
+      "canonicalUrl": "https://ais-dev-qu7wretydoetjwztwauaud-827871246101.europe-west2.run.app/?story=geneva-accord-digital-trade-tariff-framework",
+      "summaryNote": "Breaking global dispatch update",
+      "status": "published",
+      "createdAt": "2026-11-19T02:03:11.787Z"
+    }
+  ],
+  "platformCollectedUsd": {
+    "website": 1178.94,
+    "android_apk": 834.68,
+    "base44_app": 550.69,
+    "meta_instagram": 4.86
+  },
+  "revenueCollections": [
+    {
+      "id": "REV-COLL-WOI6A-DI",
+      "totalCollectedUsd": 4.86,
+      "platformsSweptCount": 1,
+      "items": [
+        {
+          "platform": "meta_instagram",
+          "platformLabel": "Meta · Instagram Reels",
+          "clicksCollected": 25,
+          "watchHoursCollected": 0.5,
+          "grossCollectedUsd": 6.94,
+          "creatorNetCollectedUsd": 4.86,
+          "sourceMode": "verified_platform_meter"
+        }
+      ],
+      "creditedToBalanceUsd": 4.86,
+      "settledAt": "2026-11-19T02:03:11.746Z"
+    },
+    {
+      "id": "REV-COLL-WNW2Y-0P",
+      "totalCollectedUsd": 2564.31,
+      "platformsSweptCount": 3,
+      "items": [
+        {
+          "platform": "website",
+          "platformLabel": "News Hub 24+.com Website",
+          "clicksCollected": 6420,
+          "watchHoursCollected": 54.03,
+          "grossCollectedUsd": 1684.2,
+          "creatorNetCollectedUsd": 1178.94,
+          "sourceMode": "verified_platform_meter"
+        },
+        {
+          "platform": "android_apk",
+          "platformLabel": "News Hub 24+ Android APK",
+          "clicksCollected": 4190,
+          "watchHoursCollected": 32.83,
+          "grossCollectedUsd": 1192.4,
+          "creatorNetCollectedUsd": 834.68,
+          "sourceMode": "verified_platform_meter"
+        },
+        {
+          "platform": "base44_app",
+          "platformLabel": "Base44 Official App",
+          "clicksCollected": 2840,
+          "watchHoursCollected": 21.41,
+          "grossCollectedUsd": 786.7,
+          "creatorNetCollectedUsd": 550.69,
+          "sourceMode": "verified_platform_meter"
+        }
+      ],
+      "creditedToBalanceUsd": 2564.31,
+      "settledAt": "2026-11-19T02:02:43.113Z"
+    }
+  ]
+}

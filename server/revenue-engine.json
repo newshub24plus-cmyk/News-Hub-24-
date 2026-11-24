@@ -1,0 +1,150 @@
+{
+  "totalPaidOutUsd": 1840,
+  "channels": {
+    "website": {
+      "channel": "website",
+      "label": "News Hub 24+.com Website",
+      "clicks": 6420,
+      "videoViews": 11840,
+      "watchSeconds": 194500,
+      "grossUsd": 1684.2,
+      "creatorNetUsd": 1178.94
+    },
+    "android_apk": {
+      "channel": "android_apk",
+      "label": "Android APK App",
+      "clicks": 4190,
+      "videoViews": 6820,
+      "watchSeconds": 118200,
+      "grossUsd": 1192.4,
+      "creatorNetUsd": 834.68
+    },
+    "base44_app": {
+      "channel": "base44_app",
+      "label": "Base44 Official App",
+      "clicks": 2840,
+      "videoViews": 4400,
+      "watchSeconds": 77070,
+      "grossUsd": 786.7,
+      "creatorNetUsd": 550.69
+    }
+  },
+  "reelStats": {
+    "reel-001": {
+      "id": "reel-001",
+      "views": 4280,
+      "watchSeconds": 74900,
+      "clicks": 615,
+      "earnedUsd": 164.45
+    },
+    "reel-002": {
+      "id": "reel-002",
+      "views": 3890,
+      "watchSeconds": 61420,
+      "clicks": 540,
+      "earnedUsd": 142.8
+    },
+    "reel-003": {
+      "id": "reel-003",
+      "views": 5120,
+      "watchSeconds": 86100,
+      "clicks": 790,
+      "earnedUsd": 198.2
+    },
+    "reel-004": {
+      "id": "reel-004",
+      "views": 3640,
+      "watchSeconds": 71200,
+      "clicks": 492,
+      "earnedUsd": 138.6
+    },
+    "reel-005": {
+      "id": "reel-005",
+      "views": 2950,
+      "watchSeconds": 44250,
+      "clicks": 840,
+      "earnedUsd": 215.9
+    },
+    "reel-006": {
+      "id": "reel-006",
+      "views": 3180,
+      "watchSeconds": 51900,
+      "clicks": 465,
+      "earnedUsd": 129.35
+    }
+  },
+  "recentEvents": [
+    {
+      "id": "NH24-PLT-WOI5W",
+      "eventType": "video_watch",
+      "platform": "website",
+      "sourceLabel": "Instagram Reels: Verification Telemetry",
+      "grossUsd": 6.94,
+      "creatorNetUsd": 4.858,
+      "createdAt": "2026-11-19T02:03:11.732Z"
+    },
+    {
+      "id": "NH24-REV-E2EZR",
+      "eventType": "reversal",
+      "platform": "website",
+      "sourceLabel": "Reversed NH24-OWN-2ESHBU4 (+$0.05 restored): Automated smoke verification reversal",
+      "grossUsd": 0.05,
+      "creatorNetUsd": 0.05,
+      "createdAt": "2026-11-18T00:34:21.927Z"
+    },
+    {
+      "id": "NH24-OWN-2ESHBU4",
+      "eventType": "withdrawal",
+      "platform": "website",
+      "sourceLabel": "Withdrawal → MTN MoMo Ghana (•••• 1975) · GHS 0.59",
+      "grossUsd": 0.05,
+      "creatorNetUsd": 0.05,
+      "createdAt": "2026-11-18T00:34:21.665Z"
+    },
+    {
+      "id": "NH24-TXREV-DM76F",
+      "eventType": "reversal",
+      "platform": "website",
+      "sourceLabel": "Tx Reversal NH24-STRS-DM75N: -$5.00 (Automated smoke test cleanup)",
+      "grossUsd": 5,
+      "creatorNetUsd": 3.5,
+      "createdAt": "2026-11-18T00:21:45.303Z"
+    },
+    {
+      "id": "NH24-STRS-DM75N",
+      "eventType": "creator_support",
+      "platform": "android_apk",
+      "sourceLabel": "Facebook-Style 500 Stars on Verification Dispatch",
+      "grossUsd": 5,
+      "creatorNetUsd": 3.5,
+      "createdAt": "2026-11-18T00:21:45.275Z"
+    },
+    {
+      "id": "NH24-REV-9A14",
+      "eventType": "click_ad",
+      "platform": "website",
+      "sourceLabel": "Commercials & Ads: Clean-Frame Spot CTA",
+      "grossUsd": 0.45,
+      "creatorNetUsd": 0.315,
+      "createdAt": "2026-11-13T07:12:00Z"
+    },
+    {
+      "id": "NH24-REV-9A13",
+      "eventType": "video_instream_ad",
+      "platform": "android_apk",
+      "sourceLabel": "Sports Highlight: Sprint Cadence Telemetry (12s+ Ad)",
+      "grossUsd": 0.025,
+      "creatorNetUsd": 0.0175,
+      "createdAt": "2026-11-13T07:08:00Z"
+    },
+    {
+      "id": "NH24-REV-9A12",
+      "eventType": "click_article",
+      "platform": "base44_app",
+      "sourceLabel": "Geneva Accord Digital Trade Framework",
+      "grossUsd": 0.22,
+      "creatorNetUsd": 0.154,
+      "createdAt": "2026-11-13T06:54:00Z"
+    }
+  ]
+}

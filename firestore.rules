@@ -1,0 +1,794 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 3: Reusable Hardened Global Helpers
+    // -------------------------------------------------------------------------
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedSignedIn() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isVerifiedOwner(userId) {
+      return isVerifiedSignedIn() && request.auth.uid == userId;
+    }
+
+    function isBootstrapAdmin() {
+      return isVerifiedSignedIn()
+        && request.auth.token.email == 'newshub24plus@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrapAdmin()
+        || (isVerifiedSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isValidContinent(c) {
+      return c == 'Africa' || c == 'Europe' || c == 'North America' || c == 'Asia & Middle East';
+    }
+
+    function isValidAdminUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'email', 'role', 'createdAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 160
+        && data.role == 'admin'
+        && data.createdAt is timestamp;
+    }
+
+    function isValidFrontPageUpdate(data) {
+      return data.keys().hasAll([
+          'id', 'title', 'deck', 'category', 'author', 'authorUid',
+          'tags', 'status', 'publishedAt', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'title', 'deck', 'body', 'category', 'author', 'authorUid',
+          'imageUrl', 'source', 'url', 'tags', 'status', 'publishedAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.title is string && data.title.size() >= 4 && data.title.size() <= 240
+        && data.deck is string && data.deck.size() >= 4 && data.deck.size() <= 800
+        && (!('body' in data) || (data.body is string && data.body.size() <= 20000))
+        && data.category is string && data.category.size() >= 2 && data.category.size() <= 64
+        && data.author is string && data.author.size() >= 2 && data.author.size() <= 120
+        && isValidId(data.authorUid)
+        && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 512))
+        && (!('source' in data) || (data.source is string && data.source.size() <= 160))
+        && (!('url' in data) || (data.url is string && data.url.size() <= 512))
+        && data.tags is list && data.tags.size() >= 1 && data.tags.size() <= 10
+        && data.tags[0] is string && data.tags[0].size() >= 1 && data.tags[0].size() <= 40
+        && (data.status == 'published' || data.status == 'breaking' || data.status == 'archived')
+        && data.publishedAt is string && data.publishedAt.size() >= 10 && data.publishedAt.size() <= 64
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSeoSettings(data) {
+      return data.keys().hasAll([
+          'title', 'description', 'news_keywords', 'author',
+          'updatedByUid', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'title', 'description', 'news_keywords', 'author',
+          'ogTitle', 'ogDescription', 'canonicalUrl',
+          'updatedByUid', 'createdAt', 'updatedAt'
+        ])
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 160
+        && data.description is string && data.description.size() >= 10 && data.description.size() <= 400
+        && data.news_keywords is string && data.news_keywords.size() >= 2 && data.news_keywords.size() <= 400
+        && data.author is string && data.author.size() >= 2 && data.author.size() <= 120
+        && (!('ogTitle' in data) || (data.ogTitle is string && data.ogTitle.size() <= 160))
+        && (!('ogDescription' in data) || (data.ogDescription is string && data.ogDescription.size() <= 400))
+        && (!('canonicalUrl' in data) || (data.canonicalUrl is string && data.canonicalUrl.size() <= 300))
+        && isValidId(data.updatedByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidGhanaPayAccount(data) {
+      return data.keys().hasAll([
+          'uid', 'ghanaPayId', 'momoNumber', 'network',
+          'accountName', 'email', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'ghanaPayId', 'momoNumber', 'network',
+          'accountName', 'email', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.ghanaPayId is string && data.ghanaPayId.size() >= 4 && data.ghanaPayId.size() <= 64
+        && data.momoNumber is string && data.momoNumber.size() >= 9 && data.momoNumber.size() <= 20
+        && (data.network == 'MTN' || data.network == 'TELECEL' || data.network == 'AT' || data.network == 'GHANAPAY')
+        && data.accountName is string && data.accountName.size() >= 2 && data.accountName.size() <= 120
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 160
+        && (data.status == 'active' || data.status == 'suspended')
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTransactionLog(data) {
+      return data.keys().hasAll([
+          'txRef', 'receiptNumber', 'ownerUid', 'payerEmail', 'payerPhone',
+          'paymentScope', 'recipientPhone', 'recipientName', 'network',
+          'itemName', 'amountGhs', 'feeGhs', 'totalGhs', 'currency',
+          'status', 'settlementMode', 'settlementMessage', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'txRef', 'receiptNumber', 'ownerUid', 'payerEmail', 'payerPhone',
+          'paymentScope', 'recipientPhone', 'recipientName', 'network',
+          'itemName', 'amountGhs', 'feeGhs', 'totalGhs', 'currency',
+          'status', 'settlementMode', 'settlementMessage', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.txRef)
+        && data.receiptNumber is string && data.receiptNumber.size() >= 4 && data.receiptNumber.size() <= 64
+        && isValidId(data.ownerUid)
+        && data.payerEmail is string && data.payerEmail.size() >= 5 && data.payerEmail.size() <= 160
+        && data.payerPhone is string && data.payerPhone.size() >= 9 && data.payerPhone.size() <= 20
+        && (data.paymentScope == 'merchant' || data.paymentScope == 'third_party')
+        && data.recipientPhone is string && data.recipientPhone.size() >= 9 && data.recipientPhone.size() <= 20
+        && data.recipientName is string && data.recipientName.size() >= 2 && data.recipientName.size() <= 120
+        && (data.network == 'MTN' || data.network == 'TELECEL' || data.network == 'AT' || data.network == 'GHANAPAY' || data.network == 'GHIPSS_BANK')
+        && data.itemName is string && data.itemName.size() >= 2 && data.itemName.size() <= 200
+        && data.amountGhs is number && data.amountGhs > 0 && data.amountGhs <= 500000
+        && data.feeGhs is number && data.feeGhs >= 0 && data.feeGhs <= 50000
+        && data.totalGhs is number && data.totalGhs >= data.amountGhs && data.totalGhs <= 550000
+        && data.currency == 'GHS'
+        && (data.status == 'pending' || data.status == 'completed' || data.status == 'failed' || data.status == 'reversed')
+        && (data.settlementMode == 'live_ghanapay_api' || data.settlementMode == 'verified_ghanapay_ledger')
+        && data.settlementMessage is string && data.settlementMessage.size() >= 2 && data.settlementMessage.size() <= 300
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCreatorNotification(data) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'type', 'title', 'message',
+          'metricDate', 'actualAmountUsd', 'verifiedRealFunds',
+          'read', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'type', 'title', 'message',
+          'metricDate', 'actualAmountUsd', 'thresholdUsd',
+          'verifiedRealFunds', 'referenceId', 'read',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id.size() >= 4
+        && isValidId(data.ownerUid)
+        && (
+          data.type == 'daily_verified_milestone' ||
+          data.type == 'daily_total_milestone' ||
+          data.type == 'withdrawal_processed' ||
+          data.type == 'verified_settlement'
+        )
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 160
+        && data.message is string && data.message.size() >= 4 && data.message.size() <= 400
+        && data.metricDate is string && data.metricDate.size() >= 10 && data.metricDate.size() <= 20
+        && data.actualAmountUsd is number && data.actualAmountUsd >= 0 && data.actualAmountUsd <= 10000000
+        && (!('thresholdUsd' in data) || (data.thresholdUsd is number && data.thresholdUsd >= 1 && data.thresholdUsd <= 10000000))
+        && data.verifiedRealFunds is bool
+        && (!('referenceId' in data) || (data.referenceId is string && data.referenceId.size() <= 128))
+        && data.read is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCustomerKycProfile(data) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'fullName', 'email', 'phone', 'nationality',
+          'countryOfResidence', 'continent', 'dateOfBirth', 'idType', 'idNumberMasked',
+          'residentialAddress', 'city', 'occupation', 'sourceOfFunds',
+          'purposeOfTransaction', 'verificationTier', 'status', 'dailyLimitUsd',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'fullName', 'email', 'phone', 'nationality',
+          'countryOfResidence', 'continent', 'dateOfBirth', 'idType', 'idNumberMasked',
+          'residentialAddress', 'city', 'occupation', 'sourceOfFunds',
+          'purposeOfTransaction', 'verificationTier', 'status', 'dailyLimitUsd',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id.size() >= 4
+        && isValidId(data.ownerUid)
+        && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120
+        && data.email is string && data.email.size() >= 5 && data.email.size() <= 160
+        && data.phone is string && data.phone.size() >= 7 && data.phone.size() <= 24
+        && data.nationality is string && data.nationality.size() >= 2 && data.nationality.size() <= 64
+        && data.countryOfResidence is string && data.countryOfResidence.size() >= 2 && data.countryOfResidence.size() <= 64
+        && isValidContinent(data.continent)
+        && data.dateOfBirth is string && data.dateOfBirth.size() >= 8 && data.dateOfBirth.size() <= 20
+        && (data.idType == 'national_id' || data.idType == 'passport' || data.idType == 'drivers_license' || data.idType == 'voters_id')
+        && data.idNumberMasked is string && data.idNumberMasked.size() >= 2 && data.idNumberMasked.size() <= 64
+        && data.residentialAddress is string && data.residentialAddress.size() >= 4 && data.residentialAddress.size() <= 200
+        && data.city is string && data.city.size() >= 2 && data.city.size() <= 80
+        && data.occupation is string && data.occupation.size() >= 2 && data.occupation.size() <= 100
+        && (
+          data.sourceOfFunds == 'salary' ||
+          data.sourceOfFunds == 'business_revenue' ||
+          data.sourceOfFunds == 'creator_payouts' ||
+          data.sourceOfFunds == 'remittance_family' ||
+          data.sourceOfFunds == 'savings'
+        )
+        && data.purposeOfTransaction is string && data.purposeOfTransaction.size() >= 3 && data.purposeOfTransaction.size() <= 200
+        && (data.verificationTier == 'basic' || data.verificationTier == 'standard' || data.verificationTier == 'enhanced')
+        && (data.status == 'verified' || data.status == 'pending_review')
+        && data.dailyLimitUsd is number && data.dailyLimitUsd >= 100 && data.dailyLimitUsd <= 50000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidRemittanceTransfer(data) {
+      return data.keys().hasAll([
+          'mtcn', 'ownerUid', 'customerKycId', 'senderName', 'senderEmail', 'senderPhone',
+          'senderCountry', 'senderContinent', 'senderCurrency', 'recipientName', 'recipientPhone',
+          'recipientCountry', 'recipientContinent', 'recipientCurrency', 'corridorId', 'corridorLabel',
+          'payoutMethod', 'paymentRail', 'sendAmountUsd', 'totalFeeUsd', 'totalChargedUsd',
+          'receiveAmountLocal', 'pickupCode', 'status', 'settlementMode', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'mtcn', 'ownerUid', 'customerKycId', 'senderName', 'senderEmail', 'senderPhone',
+          'senderCountry', 'senderContinent', 'senderCurrency', 'recipientName', 'recipientPhone',
+          'recipientCountry', 'recipientContinent', 'recipientCurrency', 'corridorId', 'corridorLabel',
+          'payoutMethod', 'paymentRail', 'sendAmountUsd', 'totalFeeUsd', 'totalChargedUsd',
+          'receiveAmountLocal', 'pickupCode', 'status', 'settlementMode', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.mtcn) && data.mtcn.size() >= 6
+        && isValidId(data.ownerUid)
+        && data.customerKycId is string && data.customerKycId.size() >= 2 && data.customerKycId.size() <= 128
+        && data.senderName is string && data.senderName.size() >= 2 && data.senderName.size() <= 120
+        && data.senderEmail is string && data.senderEmail.size() >= 5 && data.senderEmail.size() <= 160
+        && data.senderPhone is string && data.senderPhone.size() >= 7 && data.senderPhone.size() <= 24
+        && data.senderCountry is string && data.senderCountry.size() >= 2 && data.senderCountry.size() <= 64
+        && isValidContinent(data.senderContinent)
+        && data.senderCurrency is string && data.senderCurrency.size() >= 3 && data.senderCurrency.size() <= 8
+        && data.recipientName is string && data.recipientName.size() >= 2 && data.recipientName.size() <= 120
+        && data.recipientPhone is string && data.recipientPhone.size() >= 7 && data.recipientPhone.size() <= 24
+        && data.recipientCountry is string && data.recipientCountry.size() >= 2 && data.recipientCountry.size() <= 64
+        && isValidContinent(data.recipientContinent)
+        && data.recipientCurrency is string && data.recipientCurrency.size() >= 3 && data.recipientCurrency.size() <= 8
+        && (
+          data.corridorId == 'africa_domestic' ||
+          data.corridorId == 'intra_africa' ||
+          data.corridorId == 'africa_europe' ||
+          data.corridorId == 'africa_north_america' ||
+          data.corridorId == 'africa_asia_mena' ||
+          data.corridorId == 'intercontinental_global'
+        )
+        && data.corridorLabel is string && data.corridorLabel.size() >= 2 && data.corridorLabel.size() <= 120
+        && (
+          data.payoutMethod == 'mobile_money' ||
+          data.payoutMethod == 'bank_deposit' ||
+          data.payoutMethod == 'cash_pickup' ||
+          data.payoutMethod == 'newshub_wallet' ||
+          data.payoutMethod == 'ussd_789'
+        )
+        && data.paymentRail is string && data.paymentRail.size() >= 2 && data.paymentRail.size() <= 64
+        && data.sendAmountUsd is number && data.sendAmountUsd >= 1 && data.sendAmountUsd <= 25000
+        && data.totalFeeUsd is number && data.totalFeeUsd >= 0 && data.totalFeeUsd <= 5000
+        && data.totalChargedUsd is number && data.totalChargedUsd >= data.sendAmountUsd && data.totalChargedUsd <= 30000
+        && data.receiveAmountLocal is number && data.receiveAmountLocal >= 0 && data.receiveAmountLocal <= 500000000
+        && data.pickupCode is string && data.pickupCode.size() >= 4 && data.pickupCode.size() <= 32
+        && (data.status == 'Ready for Pickup' || data.status == 'In Transit' || data.status == 'Collected / Settled' || data.status == 'Reversed')
+        && (data.settlementMode == 'live_gateway' || data.settlementMode == 'verified_corridor_ledger' || data.settlementMode == 'ussd_789')
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAirtimeOrder(data) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'buyerName', 'buyerEmail', 'recipientPhone',
+          'countryCode', 'countryName', 'continent', 'carrier', 'amountUsd',
+          'feeUsd', 'totalChargedUsd', 'localCurrency', 'localTopupAmount',
+          'paymentRail', 'channel', 'status', 'providerRef', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'buyerName', 'buyerEmail', 'recipientPhone',
+          'countryCode', 'countryName', 'continent', 'carrier', 'amountUsd',
+          'feeUsd', 'totalChargedUsd', 'localCurrency', 'localTopupAmount',
+          'paymentRail', 'channel', 'status', 'providerRef', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id.size() >= 4
+        && isValidId(data.ownerUid)
+        && data.buyerName is string && data.buyerName.size() >= 2 && data.buyerName.size() <= 120
+        && data.buyerEmail is string && data.buyerEmail.size() >= 5 && data.buyerEmail.size() <= 160
+        && data.recipientPhone is string && data.recipientPhone.size() >= 7 && data.recipientPhone.size() <= 24
+        && data.countryCode is string && data.countryCode.size() >= 2 && data.countryCode.size() <= 8
+        && data.countryName is string && data.countryName.size() >= 2 && data.countryName.size() <= 80
+        && isValidContinent(data.continent)
+        && data.carrier is string && data.carrier.size() >= 2 && data.carrier.size() <= 64
+        && data.amountUsd is number && data.amountUsd >= 1 && data.amountUsd <= 500
+        && data.feeUsd is number && data.feeUsd >= 0 && data.feeUsd <= 100
+        && data.totalChargedUsd is number && data.totalChargedUsd >= data.amountUsd && data.totalChargedUsd <= 600
+        && data.localCurrency is string && data.localCurrency.size() >= 3 && data.localCurrency.size() <= 8
+        && data.localTopupAmount is number && data.localTopupAmount >= 0 && data.localTopupAmount <= 10000000
+        && data.paymentRail is string && data.paymentRail.size() >= 2 && data.paymentRail.size() <= 64
+        && (data.channel == 'web' || data.channel == 'ussd_789')
+        && (data.status == 'Delivered' || data.status == 'Reversed')
+        && data.providerRef is string && data.providerRef.size() >= 4 && data.providerRef.size() <= 64
+        && data.createdAt is timestamp;
+    }
+
+    function isValidUssdReceipt(data) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'shortcode', 'msisdn', 'service',
+          'amountUsd', 'feeUsd', 'amountGhs', 'reference', 'summary', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'shortcode', 'msisdn', 'service',
+          'amountUsd', 'feeUsd', 'amountGhs', 'reference', 'summary', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id.size() >= 4
+        && isValidId(data.ownerUid)
+        && data.shortcode is string && data.shortcode.size() >= 4 && data.shortcode.size() <= 16
+        && data.msisdn is string && data.msisdn.size() >= 7 && data.msisdn.size() <= 24
+        && data['service'] is string && data['service'].size() >= 2 && data['service'].size() <= 120
+        && data.amountUsd is number && data.amountUsd >= 0 && data.amountUsd <= 50000
+        && data.feeUsd is number && data.feeUsd >= 0 && data.feeUsd <= 5000
+        && data.amountGhs is number && data.amountGhs >= 0 && data.amountGhs <= 1000000
+        && data.reference is string && data.reference.size() >= 4 && data.reference.size() <= 64
+        && data.summary is string && data.summary.size() >= 4 && data.summary.size() <= 300
+        && data.createdAt is timestamp;
+    }
+
+    function isValidCommunityFollower(data) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'displayName', 'handle', 'country', 'continent',
+          'preferredDesks', 'status', 'verifiedMember', 'joinedAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'displayName', 'handle', 'country', 'continent',
+          'preferredDesks', 'status', 'verifiedMember', 'joinedAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id.size() >= 4
+        && isValidId(data.ownerUid)
+        && data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 80
+        && data.handle is string && data.handle.size() >= 2 && data.handle.size() <= 40
+        && data.country is string && data.country.size() >= 2 && data.country.size() <= 64
+        && isValidContinent(data.continent)
+        && data.preferredDesks is list && data.preferredDesks.size() >= 1 && data.preferredDesks.size() <= 6
+        && data.preferredDesks[0] is string && data.preferredDesks[0].size() >= 2 && data.preferredDesks[0].size() <= 40
+        && (data.status == 'following' || data.status == 'paused')
+        && data.verifiedMember is bool
+        && data.joinedAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPostReaction(data) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'articleId', 'reactionType',
+          'sourcePlatform', 'reactorLabel', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'articleId', 'reactionType',
+          'sourcePlatform', 'reactorLabel', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id.size() >= 4
+        && isValidId(data.ownerUid)
+        && isValidId(data.articleId) && data.articleId.size() >= 2
+        && (
+          data.reactionType == 'insightful' ||
+          data.reactionType == 'support' ||
+          data.reactionType == 'celebrate' ||
+          data.reactionType == 'curious' ||
+          data.reactionType == 'shareworthy'
+        )
+        && data.sourcePlatform is string && data.sourcePlatform.size() >= 2 && data.sourcePlatform.size() <= 40
+        && data.reactorLabel is string && data.reactorLabel.size() >= 2 && data.reactorLabel.size() <= 80
+        && data.createdAt is timestamp;
+    }
+
+    function isValidCrossPlatformSyndication(data) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'articleId', 'articleTitle', 'category',
+          'platforms', 'canonicalUrl', 'summaryNote', 'status', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'articleId', 'articleTitle', 'category',
+          'platforms', 'canonicalUrl', 'summaryNote', 'status', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id.size() >= 4
+        && isValidId(data.ownerUid)
+        && isValidId(data.articleId) && data.articleId.size() >= 2
+        && data.articleTitle is string && data.articleTitle.size() >= 4 && data.articleTitle.size() <= 240
+        && data.category is string && data.category.size() >= 2 && data.category.size() <= 64
+        && data.platforms is list && data.platforms.size() >= 1 && data.platforms.size() <= 10
+        && data.platforms[0] is string && data.platforms[0].size() >= 2 && data.platforms[0].size() <= 40
+        && data.canonicalUrl is string && data.canonicalUrl.size() >= 8 && data.canonicalUrl.size() <= 400
+        && data.summaryNote is string && data.summaryNote.size() >= 4 && data.summaryNote.size() <= 300
+        && (data.status == 'published' || data.status == 'partial')
+        && data.createdAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /admins/{userId}
+    // -------------------------------------------------------------------------
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if false;
+      allow create: if isAdmin()
+        && isValidId(userId)
+        && isValidAdminUser(incoming())
+        && incoming().uid == userId
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isBootstrapAdmin() && isValidId(userId);
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /frontpage_updates/{updateId}
+    // Public newsroom dispatches (no PII); writes strictly restricted to admin.
+    // -------------------------------------------------------------------------
+    match /frontpage_updates/{updateId} {
+      allow get: if isValidId(updateId);
+      allow list: if true;
+      allow create: if isAdmin()
+        && isValidId(updateId)
+        && isValidFrontPageUpdate(incoming())
+        && incoming().id == updateId
+        && incoming().authorUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(updateId)
+        && isValidFrontPageUpdate(incoming())
+        && incoming().id == existing().id
+        && incoming().authorUid == existing().authorUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'deck', 'body', 'category', 'author',
+          'imageUrl', 'source', 'url', 'tags', 'status', 'publishedAt', 'updatedAt'
+        ]);
+      allow delete: if isAdmin() && isValidId(updateId);
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /seo_settings/{settingId}
+    // Public global SEO metadata (no PII); writes strictly restricted to admin.
+    // -------------------------------------------------------------------------
+    match /seo_settings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if false;
+      allow create: if isAdmin()
+        && isValidId(settingId)
+        && isValidSeoSettings(incoming())
+        && incoming().updatedByUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(settingId)
+        && isValidSeoSettings(incoming())
+        && incoming().updatedByUid == request.auth.uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'description', 'news_keywords', 'author',
+          'ogTitle', 'ogDescription', 'canonicalUrl', 'updatedByUid', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /ghanapay_accounts/{userId}
+    // Owner-isolated GhanaPay & Mobile Money login profile (contains PII).
+    // -------------------------------------------------------------------------
+    match /ghanapay_accounts/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && (existing().uid == request.auth.uid || isBootstrapAdmin());
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidGhanaPayAccount(incoming())
+        && incoming().uid == userId
+        && incoming().status == 'active'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn()
+        && isValidId(userId)
+        && isValidGhanaPayAccount(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          || (
+            isVerifiedOwner(userId)
+            && incoming().status == existing().status
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'ghanaPayId', 'momoNumber', 'network', 'accountName', 'email', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /transaction_logs/{txId}
+    // Owner-isolated GhanaPay / MoMo / Third-Party transaction audit trail.
+    // -------------------------------------------------------------------------
+    match /transaction_logs/{txId} {
+      allow get: if isValidId(txId)
+        && isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isBootstrapAdmin());
+      allow create: if isVerifiedSignedIn()
+        && isValidId(txId)
+        && isValidTransactionLog(incoming())
+        && incoming().txRef == txId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/ghanapay_accounts/$(request.auth.uid));
+      allow update: if isVerifiedSignedIn()
+        && isValidId(txId)
+        && isValidTransactionLog(incoming())
+        && incoming().txRef == existing().txRef
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          || (
+            existing().ownerUid == request.auth.uid
+            && existing().status == 'pending'
+            && (incoming().status == 'completed' || incoming().status == 'failed')
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'receiptNumber', 'settlementMessage', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /creator_notifications/{notificationId}
+    // Owner-isolated real-time milestone & withdrawal alerts.
+    // -------------------------------------------------------------------------
+    match /creator_notifications/{notificationId} {
+      allow get: if isValidId(notificationId)
+        && isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isBootstrapAdmin());
+      allow create: if isVerifiedSignedIn()
+        && isValidId(notificationId)
+        && isValidCreatorNotification(incoming())
+        && incoming().id == notificationId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn()
+        && isValidId(notificationId)
+        && isValidCreatorNotification(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().type == existing().type
+        && incoming().actualAmountUsd == existing().actualAmountUsd
+        && incoming().verifiedRealFunds == existing().verifiedRealFunds
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (existing().ownerUid == request.auth.uid || isAdmin())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(notificationId);
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /customer_kyc_profiles/{profileId}
+    // Strictly owner-isolated customer background KYC & PII.
+    // -------------------------------------------------------------------------
+    match /customer_kyc_profiles/{profileId} {
+      allow get: if isValidId(profileId)
+        && isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isBootstrapAdmin());
+      allow create: if isVerifiedSignedIn()
+        && isValidId(profileId)
+        && isValidCustomerKycProfile(incoming())
+        && incoming().id == profileId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn()
+        && isValidId(profileId)
+        && isValidCustomerKycProfile(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          || (
+            existing().ownerUid == request.auth.uid
+            && incoming().status == existing().status
+            && incoming().verificationTier == existing().verificationTier
+            && incoming().dailyLimitUsd == existing().dailyLimitUsd
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'fullName', 'email', 'phone', 'nationality', 'countryOfResidence',
+              'continent', 'residentialAddress', 'city', 'occupation',
+              'sourceOfFunds', 'purposeOfTransaction', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(profileId);
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /remittance_transfers/{mtcn}
+    // Strictly owner-isolated Western Union-style cross-border remittance logs.
+    // Terminal state lock prevents modifying Collected / Settled or Reversed rows.
+    // -------------------------------------------------------------------------
+    match /remittance_transfers/{mtcn} {
+      allow get: if isValidId(mtcn)
+        && isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isBootstrapAdmin());
+      allow create: if isVerifiedSignedIn()
+        && isValidId(mtcn)
+        && isValidRemittanceTransfer(incoming())
+        && incoming().mtcn == mtcn
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn()
+        && isValidId(mtcn)
+        && isValidRemittanceTransfer(incoming())
+        && incoming().mtcn == existing().mtcn
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          || (
+            existing().ownerUid == request.auth.uid
+            && (existing().status == 'Ready for Pickup' || existing().status == 'In Transit')
+            && incoming().status == 'Collected / Settled'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /airtime_orders/{orderId}
+    // Owner-isolated universal airtime purchases & receipts.
+    // -------------------------------------------------------------------------
+    match /airtime_orders/{orderId} {
+      allow get: if isValidId(orderId)
+        && isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isBootstrapAdmin());
+      allow create: if isVerifiedSignedIn()
+        && isValidId(orderId)
+        && isValidAirtimeOrder(incoming())
+        && incoming().id == orderId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(orderId)
+        && isValidAirtimeOrder(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /ussd_receipts/{receiptId}
+    // Owner-isolated immutable *789# universal shortcode USSD receipts.
+    // -------------------------------------------------------------------------
+    match /ussd_receipts/{receiptId} {
+      allow get: if isValidId(receiptId)
+        && isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isBootstrapAdmin());
+      allow create: if isVerifiedSignedIn()
+        && isValidId(receiptId)
+        && isValidUssdReceipt(incoming())
+        && incoming().id == receiptId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /community_followers/{followerId}
+    // Public community handles & news desk preferences (zero PII).
+    // -------------------------------------------------------------------------
+    match /community_followers/{followerId} {
+      allow get: if isValidId(followerId);
+      allow list: if true;
+      allow create: if isVerifiedSignedIn()
+        && isValidId(followerId)
+        && isValidCommunityFollower(incoming())
+        && incoming().id == followerId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().joinedAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedSignedIn()
+        && isValidId(followerId)
+        && isValidCommunityFollower(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().joinedAt == existing().joinedAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          || (
+            existing().ownerUid == request.auth.uid
+            && incoming().verifiedMember == existing().verifiedMember
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'handle', 'country', 'continent', 'preferredDesks', 'status', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isSignedIn() && isValidId(followerId)
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /post_reactions/{reactionId}
+    // Public verified reader reactions on published dispatches (zero PII).
+    // -------------------------------------------------------------------------
+    match /post_reactions/{reactionId} {
+      allow get: if isValidId(reactionId);
+      allow list: if true;
+      allow create: if isVerifiedSignedIn()
+        && isValidId(reactionId)
+        && isValidPostReaction(incoming())
+        && incoming().id == reactionId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(reactionId)
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /cross_platform_syndications/{syndicationId}
+    // Public cross-platform publishing receipts written strictly by verified admins.
+    // -------------------------------------------------------------------------
+    match /cross_platform_syndications/{syndicationId} {
+      allow get: if isValidId(syndicationId);
+      allow list: if true;
+      allow create: if isAdmin()
+        && isValidId(syndicationId)
+        && isValidCrossPlatformSyndication(incoming())
+        && incoming().id == syndicationId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(syndicationId);
+    }
+  }
+}

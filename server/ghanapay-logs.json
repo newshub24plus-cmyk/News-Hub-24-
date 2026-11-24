@@ -1,0 +1,25 @@
+[
+  {
+    "txRef": "NH24-GHP-MWMUAVKD-M8X9",
+    "receiptNumber": "GHP-RCPT-796685-KCJ",
+    "ownerUid": "ussd-789",
+    "payerName": "USSD Payer (+233557711975)",
+    "payerEmail": "newshub24plus@gmail.com",
+    "payerPhone": "0557711975",
+    "paymentScope": "merchant",
+    "recipientPhone": "0557711975",
+    "recipientName": "News Hub 24+ (MTN MoMo 0557711975)",
+    "network": "MTN",
+    "itemName": "*789# Direct Merchant Payment",
+    "amountUsd": 10,
+    "amountGhs": 117.53,
+    "feeGhs": 0.59,
+    "totalGhs": 118.12,
+    "currency": "GHS",
+    "status": "completed",
+    "settlementMode": "verified_ghanapay_ledger",
+    "settlementMessage": "GhanaPay (MTN) merchant checkout of GH₵ 117.53 to News Hub 24+ (0557711975) settled on Verified GhanaPay Treasury Ledger.",
+    "complianceAct": "Bank of Ghana Payment Systems and Services Act, 2019 (Act 987) · GhIPSS Instant Pay",
+    "createdAt": "2026-11-19T00:56:36.685Z"
+  }
+]

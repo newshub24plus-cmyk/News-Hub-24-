@@ -1,0 +1,6 @@
+{
+  "name": "News Hub 24+",
+  "description": "News Hub 24+ is an independent global news and media agency delivering 24/7 breaking reporting, investigative journalism, wire syndication, and an official Android APK.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
