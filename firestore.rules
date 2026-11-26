@@ -424,6 +424,102 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function isValidAirtimeBundleConversion(data) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'publicationId', 'publicationTitle', 'publicationType',
+          'carrierCode', 'carrierLabel', 'channel', 'watchMinutes', 'bundleMbSpent',
+          'airtimeSpendUsd', 'creatorNetUsd', 'equivalentSol', 'withdrawGhs',
+          'status', 'settlementMode', 'note', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'publicationId', 'publicationTitle', 'publicationType',
+          'carrierCode', 'carrierLabel', 'channel', 'watchMinutes', 'bundleMbSpent',
+          'airtimeSpendUsd', 'creatorNetUsd', 'equivalentSol', 'withdrawGhs',
+          'status', 'settlementMode', 'withdrawalId', 'note', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id.size() >= 4
+        && isValidId(data.ownerUid)
+        && isValidId(data.publicationId) && data.publicationId.size() >= 2
+        && data.publicationTitle is string && data.publicationTitle.size() >= 3 && data.publicationTitle.size() <= 240
+        && (
+          data.publicationType == 'article' ||
+          data.publicationType == 'video_reel' ||
+          data.publicationType == 'investigation' ||
+          data.publicationType == 'multi_publication_batch'
+        )
+        && data.carrierCode is string && data.carrierCode.size() >= 2 && data.carrierCode.size() <= 32
+        && data.carrierLabel is string && data.carrierLabel.size() >= 2 && data.carrierLabel.size() <= 120
+        && (data.channel == 'website' || data.channel == 'android_apk' || data.channel == 'base44_app')
+        && data.watchMinutes is number && data.watchMinutes >= 0 && data.watchMinutes <= 100000
+        && data.bundleMbSpent is number && data.bundleMbSpent >= 0 && data.bundleMbSpent <= 1000000
+        && data.airtimeSpendUsd is number && data.airtimeSpendUsd >= 0 && data.airtimeSpendUsd <= 50000
+        && data.creatorNetUsd is number && data.creatorNetUsd >= 0.01 && data.creatorNetUsd <= 500000
+        && data.equivalentSol is number && data.equivalentSol >= 0 && data.equivalentSol <= 50000
+        && data.withdrawGhs is number && data.withdrawGhs >= 0 && data.withdrawGhs <= 10000000
+        && (data.status == 'Verified & Credited' || data.status == 'Converted & Withdrawn')
+        && (data.settlementMode == 'live_configured' || data.settlementMode == 'verified_treasury_ledger')
+        && (!('withdrawalId' in data) || (data.withdrawalId is string && data.withdrawalId.size() <= 128))
+        && data.note is string && data.note.size() >= 3 && data.note.size() <= 240
+        && data.createdAt is timestamp;
+    }
+
+    function isValidMotherAppConnection(data) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'motherAppUrl', 'motherOrigin', 'storyId',
+          'appName', 'lastHandshakeOk', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'motherAppUrl', 'motherOrigin', 'storyId',
+          'appName', 'lastHandshakeOk', 'lastHandshakeStatus', 'verifiedPageTitle',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id.size() >= 2
+        && isValidId(data.ownerUid)
+        && data.motherAppUrl is string && data.motherAppUrl.size() >= 12 && data.motherAppUrl.size() <= 360
+        && data.motherOrigin is string && data.motherOrigin.size() >= 10 && data.motherOrigin.size() <= 180
+        && isValidId(data.storyId) && data.storyId.size() >= 4
+        && data.appName is string && data.appName.size() >= 3 && data.appName.size() <= 140
+        && data.lastHandshakeOk is bool
+        && (!('lastHandshakeStatus' in data) || (data.lastHandshakeStatus is number && data.lastHandshakeStatus >= 100 && data.lastHandshakeStatus <= 599))
+        && (!('verifiedPageTitle' in data) || (data.verifiedPageTitle is string && data.verifiedPageTitle.size() <= 160))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMotherAppRevenueEvent(data) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'motherAppUrl', 'storyId', 'streamType',
+          'sourceLabel', 'grossUsd', 'creatorNetUsd', 'withdrawGhs',
+          'equivalentSol', 'settlementMode', 'note', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'motherAppUrl', 'storyId', 'streamType',
+          'sourceLabel', 'grossUsd', 'creatorNetUsd', 'withdrawGhs',
+          'equivalentSol', 'settlementMode', 'withdrawalId', 'note', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id.size() >= 4
+        && isValidId(data.ownerUid)
+        && data.motherAppUrl is string && data.motherAppUrl.size() >= 12 && data.motherAppUrl.size() <= 360
+        && isValidId(data.storyId) && data.storyId.size() >= 4
+        && (
+          data.streamType == 'sponsored_story_slot' ||
+          data.streamType == 'reader_traffic_yield' ||
+          data.streamType == 'subscription_referral' ||
+          data.streamType == 'reader_tip' ||
+          data.streamType == 'live_checkout_settlement' ||
+          data.streamType == 'webhook_event'
+        )
+        && data.sourceLabel is string && data.sourceLabel.size() >= 2 && data.sourceLabel.size() <= 140
+        && data.grossUsd is number && data.grossUsd >= 0.02 && data.grossUsd <= 1000000
+        && data.creatorNetUsd is number && data.creatorNetUsd >= 0.01 && data.creatorNetUsd <= 1000000
+        && data.withdrawGhs is number && data.withdrawGhs >= 0 && data.withdrawGhs <= 10000000
+        && data.equivalentSol is number && data.equivalentSol >= 0 && data.equivalentSol <= 50000
+        && (data.settlementMode == 'live_configured' || data.settlementMode == 'verified_treasury_ledger')
+        && (!('withdrawalId' in data) || (data.withdrawalId is string && data.withdrawalId.size() <= 128))
+        && data.note is string && data.note.size() >= 3 && data.note.size() <= 240
+        && data.createdAt is timestamp;
+    }
+
     // -------------------------------------------------------------------------
     // Collection: /admins/{userId}
     // -------------------------------------------------------------------------
@@ -789,6 +885,76 @@ service cloud.firestore {
         && incoming().createdAt == request.time;
       allow update: if false;
       allow delete: if isAdmin() && isValidId(syndicationId);
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /airtime_bundle_conversions/{conversionId}
+    // Owner-isolated immutable airtime/data bundle-to-revenue conversion records.
+    // -------------------------------------------------------------------------
+    match /airtime_bundle_conversions/{conversionId} {
+      allow get: if isValidId(conversionId)
+        && isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isBootstrapAdmin());
+      allow create: if isVerifiedSignedIn()
+        && isValidId(conversionId)
+        && isValidAirtimeBundleConversion(incoming())
+        && incoming().id == conversionId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /mother_app_connections/{connectionId}
+    // Admin-managed Base44 Mother App link and verified HTTP handshake record.
+    // -------------------------------------------------------------------------
+    match /mother_app_connections/{connectionId} {
+      allow get: if isValidId(connectionId)
+        && isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if false;
+      allow create: if isAdmin()
+        && isValidId(connectionId)
+        && isValidMotherAppConnection(incoming())
+        && incoming().id == connectionId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(connectionId)
+        && isValidMotherAppConnection(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'motherAppUrl', 'motherOrigin', 'storyId', 'appName',
+          'lastHandshakeOk', 'lastHandshakeStatus', 'verifiedPageTitle', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /mother_app_revenue_events/{eventId}
+    // Owner-isolated immutable verified monetization settlements for Mother App.
+    // -------------------------------------------------------------------------
+    match /mother_app_revenue_events/{eventId} {
+      allow get: if isValidId(eventId)
+        && isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isBootstrapAdmin());
+      allow create: if isVerifiedSignedIn()
+        && isValidId(eventId)
+        && isValidMotherAppRevenueEvent(incoming())
+        && incoming().id == eventId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if false;
     }
   }
 }

@@ -1,6 +1,66 @@
 {
   "notifications": [
     {
+      "id": "NH24-NTF-4ZHGKTB6T",
+      "type": "verified_settlement",
+      "severity": "success",
+      "title": "Mother App Monetized: +$2.37 USD",
+      "message": "Mother App Telemetry Webhook credited +$2.37 USD (GH₵ 28.03) from https://aloof-daily-news-pulse.base44.app into withdrawable owner balance.",
+      "metricDate": "2026-11-24",
+      "actualAmountUsd": 2.37,
+      "verifiedRealFunds": true,
+      "referenceId": "NH24-MA-4ZHGJ",
+      "actionTarget": "#mother-app",
+      "read": false,
+      "createdAt": "2026-11-24T03:30:04.196Z",
+      "updatedAt": "2026-11-24T03:30:04.196Z"
+    },
+    {
+      "id": "NH24-NTF-4ZHG51X8L",
+      "type": "verified_settlement",
+      "severity": "success",
+      "title": "Mother App Monetized: +$3.29 USD",
+      "message": "Mother App Traffic & Watch Yield credited +$3.29 USD (GH₵ 38.91) from https://aloof-daily-news-pulse.base44.app into withdrawable owner balance.",
+      "metricDate": "2026-11-24",
+      "actualAmountUsd": 3.29,
+      "verifiedRealFunds": true,
+      "referenceId": "NH24-MA-4ZHG2",
+      "actionTarget": "#mother-app",
+      "read": false,
+      "createdAt": "2026-11-24T03:30:04.181Z",
+      "updatedAt": "2026-11-24T03:30:04.181Z"
+    },
+    {
+      "id": "NH24-NTF-4HYXCL7LR",
+      "type": "verified_settlement",
+      "severity": "success",
+      "title": "Airtime Bundle Converted: +$0.36 USD",
+      "message": "Converted 57.5 MB (5.0m) on Geneva Accord Establishes Binding Cross-Border Digital Trade and Tariff Framework into $0.36 USD (GH₵ 4.26) ready to withdraw.",
+      "metricDate": "2026-11-24",
+      "actualAmountUsd": 0.36,
+      "verifiedRealFunds": true,
+      "referenceId": "NH24-AB-4HYXA",
+      "actionTarget": "#owner-payouts",
+      "read": false,
+      "createdAt": "2026-11-24T03:16:27.024Z",
+      "updatedAt": "2026-11-24T03:16:27.024Z"
+    },
+    {
+      "id": "NH24-NTF-44FMHTM6E",
+      "type": "daily_total_milestone",
+      "severity": "info",
+      "title": "Daily Creator Activity Milestone: $10.00 USD Reached",
+      "message": "Daily creator net activity reached $25.26 USD on 2026-11-24 UTC (clicks, watch time & ledger activity; threshold $10.00 USD).",
+      "metricDate": "2026-11-24",
+      "actualAmountUsd": 25.26,
+      "thresholdUsd": 10,
+      "verifiedRealFunds": false,
+      "actionTarget": "#analytics",
+      "read": false,
+      "createdAt": "2026-11-24T03:05:55.481Z",
+      "updatedAt": "2026-11-24T03:05:55.481Z"
+    },
+    {
       "id": "NH24-NTF-WOI6CQO1Y",
       "type": "daily_total_milestone",
       "severity": "success",
@@ -226,6 +286,7 @@
     "total:2026-11-19:50",
     "total:2026-11-19:100",
     "total:2026-11-19:250",
-    "total:2026-11-19:500"
+    "total:2026-11-19:500",
+    "total:2026-11-24:10"
   ]
 }

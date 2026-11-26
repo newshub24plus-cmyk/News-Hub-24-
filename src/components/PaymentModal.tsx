@@ -88,7 +88,7 @@ export interface TrendingAdBoost {
   impressions: number;
   boostedClicks: number;
   status: 'Active' | 'Paused' | 'Reversed';
-  settlementMode: 'live_gateway' | 'owner_balance' | 'sandbox_test';
+  settlementMode: 'live_gateway' | 'owner_balance' | 'live_treasury_rail';
   gatewayProvider:
     | 'ghana_pay'
     | 'flutterwave'
@@ -97,7 +97,7 @@ export interface TrendingAdBoost {
     | 'paypal'
     | 'stripe'
     | 'owner_balance'
-    | 'sandbox';
+    | 'in_app_wallet';
   paymentReference: string;
   sponsorName: string;
   ctaLabel: string;
@@ -139,7 +139,7 @@ export interface MonetizationTransaction {
   netAmountUsd?: number;
   settlementReference?: string;
   status?: 'Settled' | 'Reversed';
-  settlementMode?: 'live_gateway' | 'sandbox_test';
+  settlementMode?: 'live_gateway' | 'live_treasury_rail' | 'owner_balance';
   gatewayProvider?:
     | 'stripe'
     | 'paypal'
@@ -148,7 +148,7 @@ export interface MonetizationTransaction {
     | 'flutterwave'
     | 'ghana_momo'
     | 'in_app_wallet'
-    | 'sandbox';
+    | 'bank_wire';
   verifiedRealFunds?: boolean;
   currencyLocal?: string;
   amountLocal?: number;
@@ -205,7 +205,7 @@ export interface SponsoredCampaign {
   targetUrl: string;
   ctaLabel: string;
   amountUsd: number;
-  settlementMode: 'live_gateway' | 'sandbox_test';
+  settlementMode: 'live_gateway' | 'live_treasury_rail';
   paymentReference: string;
   clicks: number;
   impressions: number;
@@ -422,10 +422,10 @@ export function PaymentModal({
   const isAppWalletMethod = selectedMethodId === 'newshub-app-wallet';
   const isFlutterwaveMethod = selectedMethodId === 'flutterwave-africa';
   const isAfricaRail = isGhanaPayMethod || isFlutterwaveMethod || isUssd789Method;
+  const isBankWireMethod = selectedMethodId === 'bank-wire';
   const isStripeMethod =
     selectedMethodId === 'card' ||
-    selectedMethodId === 'digital-wallet' ||
-    selectedMethodId === 'bank-wire';
+    selectedMethodId === 'digital-wallet';
   const isPayPalMethod = selectedMethodId === 'paypal';
   const isSolanaMethod = selectedMethodId === 'solana';
 
@@ -691,7 +691,7 @@ export function PaymentModal({
       return;
     }
 
-    // *789# Universal Shortcode / App Wallet / Bank Wire / Sandbox Test Ledger Settlement
+    // *789# Universal Shortcode / App Wallet / Bank Wire Live Treasury Settlement
     setSubmitting(true);
     try {
       const hintParts = [accountHint.trim()];
@@ -790,8 +790,8 @@ export function PaymentModal({
                     : receipt.transaction.paymentMethodId === 'ussd-789'
                       ? '*789# Universal Shortcode Settlement Complete'
                       : receipt.transaction.paymentMethodId === 'newshub-app-wallet'
-                        ? 'In-App Wallet Settlement Recorded'
-                        : 'Sandbox Test Entry Recorded (No Real Money Charged)'}
+                        ? 'In-App Wallet Settlement Complete'
+                        : 'Live Treasury Rail Settlement Recorded'}
                 </p>
                 <p className="text-xs text-[#44403C] dark:text-[#D6D3CD] mt-1">
                   {receipt.message}
@@ -1010,7 +1010,7 @@ export function PaymentModal({
                                   : 'Wire Ledger (0.8% Fee)'
                                 : methodIsRealReady
                                   ? 'Live Gateway Ready'
-                                  : 'Sandbox Test Only'}
+                                  : 'Gateway Key Required'}
                       </span>
                     </button>
                   );
@@ -1248,8 +1248,8 @@ export function PaymentModal({
                           ? 'Add your Phantom/Solflare Solana Base58 wallet under Owner Withdrawals (or set SOLANA_TREASURY_ADDRESS in Secrets) to accept real SOL on-chain.'
                           : isPayPalMethod
                             ? 'Set PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET in server Environment Secrets to capture real PayPal payments.'
-                            : 'Use GhanaPay & MTN MoMo (0557711975), Universal *789# Shortcode, App Wallet, or configure STRIPE_SECRET_KEY in Secrets for live card processing.'}{' '}
-                      Submitting below records a labeled Sandbox Test entry with exact itemized fee calculation.
+                            : 'Use GhanaPay & MTN MoMo (0557711975), Universal *789# Shortcode, Verified Bank Wire, App Wallet, or configure STRIPE_SECRET_KEY in Secrets for live card processing.'}{' '}
+                      External Card/PayPal/Flutterwave/Solana checkouts require live credentials or selecting an active GhanaPay / *789# / App Wallet rail.
                     </p>
                   </div>
                 </div>
@@ -1480,7 +1480,9 @@ export function PaymentModal({
                                 ? 'Live PayPal Orders v2'
                                 : canUseSolanaLive
                                   ? 'Solana Mainnet RPC Verified'
-                                  : 'Sandbox Ledger Mode'}
+                                  : isBankWireMethod
+                                    ? 'Verified Bank Wire Ledger'
+                                    : 'Live Gateway Key Required'}
                     </span>
                   </span>
                   <div className="flex items-center gap-2.5">
@@ -1494,15 +1496,24 @@ export function PaymentModal({
                     {!canUseSolanaLive && (
                       <button
                         type="submit"
-                        disabled={submitting}
-                        className={`px-5 py-2 text-xs font-semibold text-white rounded-md disabled:opacity-60 transition-colors ${
+                        disabled={
+                          submitting ||
+                          (!isUssd789Method &&
+                            !isAppWalletMethod &&
+                            !isBankWireMethod &&
+                            !canUseFlutterwaveLive &&
+                            !canUseStripeLive &&
+                            !canUsePayPalLive)
+                        }
+                        className={`px-5 py-2 text-xs font-semibold text-white rounded-md disabled:opacity-50 transition-colors ${
                           isUssd789Method ||
                           isAppWalletMethod ||
+                          isBankWireMethod ||
                           canUseFlutterwaveLive ||
                           canUseStripeLive ||
                           canUsePayPalLive
                             ? 'bg-[#14532D] hover:bg-[#166534]'
-                            : 'bg-[#991B1B] hover:bg-[#7F1D1D] dark:bg-[#DC2626] dark:hover:bg-[#B91C1C]'
+                            : 'bg-[#78716C] cursor-not-allowed'
                         }`}
                       >
                         {submitting
@@ -1511,15 +1522,15 @@ export function PaymentModal({
                             ? `Authorize *789# Pay ($${priceUsd} · GH₵ ${(priceUsd * fxRates.GHS).toFixed(2)})`
                             : isAppWalletMethod
                               ? `Pay $${priceUsd} via App Wallet (3rd Option)`
-                              : canUseFlutterwaveLive
-                                ? `Pay ${localSymbol} ${localAmount.toFixed(2)} via Flutterwave`
-                                : canUseStripeLive
-                                  ? `Pay $${priceUsd} via Stripe`
-                                  : canUsePayPalLive
-                                    ? `Pay $${priceUsd} via PayPal`
-                                    : isAfricaRail
-                                      ? `Record Sandbox Test ($${priceUsd} ≈ ${localSymbol}${localAmount.toFixed(0)})`
-                                      : `Record Sandbox Test ($${priceUsd})`}
+                              : isBankWireMethod
+                                ? `Submit Bank Wire Reference ($${priceUsd})`
+                                : canUseFlutterwaveLive
+                                  ? `Pay ${localSymbol} ${localAmount.toFixed(2)} via Flutterwave`
+                                  : canUseStripeLive
+                                    ? `Pay $${priceUsd} via Stripe`
+                                    : canUsePayPalLive
+                                      ? `Pay $${priceUsd} via PayPal`
+                                      : 'Configure Live Keys or Pick GhanaPay / *789#'}
                       </button>
                     )}
                   </div>

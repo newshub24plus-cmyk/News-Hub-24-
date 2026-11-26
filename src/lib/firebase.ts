@@ -27,7 +27,10 @@ import {
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+const firestoreDatabaseId =
+  (firebaseConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId ||
+  'ai-studio-newshub24-f8ecd2be-d75e-466e-be66-a39d6d6b3f28';
+export const db = getFirestore(app, firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
@@ -1011,4 +1014,307 @@ export async function syncCrossPlatformSyndicationToFirestore(
     handleFirestoreError(error, OperationType.CREATE, path);
   }
 }
+
+// ==========================================
+// 8. AIRTIME BUNDLE-TO-REVENUE CONVERSIONS
+// ==========================================
+
+export interface AirtimeBundleConversionFirestoreRecord {
+  id: string;
+  ownerUid: string;
+  publicationId: string;
+  publicationTitle: string;
+  publicationType: 'article' | 'video_reel' | 'investigation' | 'multi_publication_batch';
+  carrierCode: string;
+  carrierLabel: string;
+  channel: 'website' | 'android_apk' | 'base44_app';
+  watchMinutes: number;
+  bundleMbSpent: number;
+  airtimeSpendUsd: number;
+  creatorNetUsd: number;
+  equivalentSol: number;
+  withdrawGhs: number;
+  status: 'Verified & Credited' | 'Converted & Withdrawn';
+  settlementMode: 'live_configured' | 'verified_treasury_ledger';
+  withdrawalId?: string;
+  note: string;
+  createdAt?: Timestamp | string;
+}
+
+export async function syncAirtimeBundleConversionToFirestore(
+  user: User,
+  conversion: {
+    id: string;
+    publicationId: string;
+    publicationTitle: string;
+    publicationType: 'article' | 'video_reel' | 'investigation' | 'multi_publication_batch';
+    carrierCode: string;
+    carrierLabel: string;
+    channel: 'website' | 'android_apk' | 'base44_app';
+    watchMinutes: number;
+    bundleMbSpent: number;
+    airtimeSpendUsd: number;
+    creatorNetUsd: number;
+    equivalentSol: number;
+    withdrawGhs: number;
+    status: 'Verified & Credited' | 'Converted & Withdrawn';
+    settlementMode: 'live_configured' | 'verified_treasury_ledger';
+    withdrawalId?: string;
+    note: string;
+  }
+): Promise<boolean> {
+  if (!user.emailVerified) return false;
+  const docId = sanitizeDocId(conversion.id, 'ab');
+  const pubDocId = sanitizeDocId(conversion.publicationId, 'pub');
+  const path = `airtime_bundle_conversions/${docId}`;
+  const docRef = doc(db, 'airtime_bundle_conversions', docId);
+  try {
+    const existing = await getDoc(docRef);
+    if (existing.exists()) return true;
+    await setDoc(docRef, {
+      id: docId,
+      ownerUid: user.uid,
+      publicationId: pubDocId.length >= 2 ? pubDocId : 'nh24-001',
+      publicationTitle: clampStr(conversion.publicationTitle, 240, 'News Hub 24+ Publication'),
+      publicationType: conversion.publicationType,
+      carrierCode: clampStr(conversion.carrierCode, 32, 'MTN_GH'),
+      carrierLabel: clampStr(conversion.carrierLabel, 120, 'MTN Ghana'),
+      channel: conversion.channel,
+      watchMinutes: Math.max(0, Math.min(100000, Number(conversion.watchMinutes.toFixed(1)))),
+      bundleMbSpent: Math.max(0, Math.min(1000000, Number(conversion.bundleMbSpent.toFixed(2)))),
+      airtimeSpendUsd: Math.max(0, Math.min(50000, Number(conversion.airtimeSpendUsd.toFixed(2)))),
+      creatorNetUsd: Math.max(0.01, Math.min(500000, Number(conversion.creatorNetUsd.toFixed(2)))),
+      equivalentSol: Math.max(0, Math.min(50000, Number(conversion.equivalentSol.toFixed(4)))),
+      withdrawGhs: Math.max(0, Math.min(10000000, Number(conversion.withdrawGhs.toFixed(2)))),
+      status: conversion.status,
+      settlementMode: conversion.settlementMode,
+      ...(conversion.withdrawalId ? { withdrawalId: clampStr(conversion.withdrawalId, 128) } : {}),
+      note: clampStr(conversion.note, 240, 'Airtime bundle watch revenue conversion'),
+      createdAt: serverTimestamp()
+    });
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function loadAirtimeBundleConversionsFromFirestore(
+  uid: string
+): Promise<AirtimeBundleConversionFirestoreRecord[]> {
+  const path = 'airtime_bundle_conversions';
+  try {
+    const q = query(
+      collection(db, path),
+      where('ownerUid', '==', uid),
+      limit(40)
+    );
+    const snap = await getDocs(q);
+    const rows = snap.docs.map((d) => {
+      const raw = d.data() as AirtimeBundleConversionFirestoreRecord;
+      const createdIso =
+        raw.createdAt && typeof raw.createdAt === 'object' && 'toDate' in raw.createdAt
+          ? raw.createdAt.toDate().toISOString()
+          : typeof raw.createdAt === 'string'
+            ? raw.createdAt
+            : new Date().toISOString();
+      return {
+        ...raw,
+        createdAt: createdIso
+      };
+    });
+    rows.sort((a, b) => {
+      const ta = typeof a.createdAt === 'string' ? Date.parse(a.createdAt) : 0;
+      const tb = typeof b.createdAt === 'string' ? Date.parse(b.createdAt) : 0;
+      return tb - ta;
+    });
+    return rows;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+// ==========================================
+// 9. BASE44 MOTHER APP CONNECTION & REVENUE
+// ==========================================
+
+export interface MotherAppConnectionFirestoreRecord {
+  id: string;
+  ownerUid: string;
+  motherAppUrl: string;
+  motherOrigin: string;
+  storyId: string;
+  appName: string;
+  lastHandshakeOk: boolean;
+  lastHandshakeStatus?: number;
+  verifiedPageTitle?: string;
+  createdAt?: Timestamp | string;
+  updatedAt?: Timestamp | string;
+}
+
+export interface MotherAppRevenueEventFirestoreRecord {
+  id: string;
+  ownerUid: string;
+  motherAppUrl: string;
+  storyId: string;
+  streamType:
+    | 'sponsored_story_slot'
+    | 'reader_traffic_yield'
+    | 'subscription_referral'
+    | 'reader_tip'
+    | 'live_checkout_settlement'
+    | 'webhook_event';
+  sourceLabel: string;
+  grossUsd: number;
+  creatorNetUsd: number;
+  withdrawGhs: number;
+  equivalentSol: number;
+  settlementMode: 'live_configured' | 'verified_treasury_ledger';
+  withdrawalId?: string;
+  note: string;
+  createdAt?: Timestamp | string;
+}
+
+export async function syncMotherAppConnectionToFirestore(
+  user: User,
+  conn: {
+    motherAppUrl: string;
+    motherOrigin: string;
+    storyId: string;
+    appName: string;
+    lastHandshakeOk: boolean;
+    lastHandshakeStatus?: number | null;
+    verifiedPageTitle?: string | null;
+  }
+): Promise<boolean> {
+  if (!user.emailVerified || !isAgencyAdminUser(user)) return false;
+  const docId = 'base44_primary';
+  const path = `mother_app_connections/${docId}`;
+  const docRef = doc(db, 'mother_app_connections', docId);
+  const storyId = sanitizeDocId(conn.storyId, 'story');
+
+  const payload = {
+    id: docId,
+    ownerUid: user.uid,
+    motherAppUrl: clampStr(conn.motherAppUrl, 360, 'https://aloof-daily-news-pulse.base44.app/story/6b04f190aa908b27ce284a57'),
+    motherOrigin: clampStr(conn.motherOrigin, 180, 'https://aloof-daily-news-pulse.base44.app'),
+    storyId: storyId.length >= 4 ? storyId : '6b04f190aa908b27ce284a57',
+    appName: clampStr(conn.appName, 140, 'News Hub 24+ Base44 Mother App'),
+    lastHandshakeOk: Boolean(conn.lastHandshakeOk),
+    ...(typeof conn.lastHandshakeStatus === 'number' &&
+    conn.lastHandshakeStatus >= 100 &&
+    conn.lastHandshakeStatus <= 599
+      ? { lastHandshakeStatus: Math.round(conn.lastHandshakeStatus) }
+      : {}),
+    ...(conn.verifiedPageTitle ? { verifiedPageTitle: clampStr(conn.verifiedPageTitle, 160) } : {}),
+    updatedAt: serverTimestamp()
+  };
+
+  try {
+    const existing = await getDoc(docRef);
+    if (existing.exists()) {
+      await updateDoc(docRef, {
+        motherAppUrl: payload.motherAppUrl,
+        motherOrigin: payload.motherOrigin,
+        storyId: payload.storyId,
+        appName: payload.appName,
+        lastHandshakeOk: payload.lastHandshakeOk,
+        ...(payload.lastHandshakeStatus !== undefined
+          ? { lastHandshakeStatus: payload.lastHandshakeStatus }
+          : {}),
+        ...(payload.verifiedPageTitle !== undefined
+          ? { verifiedPageTitle: payload.verifiedPageTitle }
+          : {}),
+        updatedAt: serverTimestamp()
+      });
+    } else {
+      await setDoc(docRef, {
+        ...payload,
+        createdAt: serverTimestamp()
+      });
+    }
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function syncMotherAppRevenueEventToFirestore(
+  user: User,
+  evt: {
+    id: string;
+    motherAppUrl: string;
+    storyId: string;
+    streamType: MotherAppRevenueEventFirestoreRecord['streamType'];
+    sourceLabel: string;
+    grossUsd: number;
+    creatorNetUsd: number;
+    withdrawGhs: number;
+    equivalentSol: number;
+    settlementMode: 'live_configured' | 'verified_treasury_ledger';
+    withdrawalId?: string;
+    note: string;
+  }
+): Promise<boolean> {
+  if (!user.emailVerified) return false;
+  const docId = sanitizeDocId(evt.id, 'ma');
+  const storyId = sanitizeDocId(evt.storyId, 'story');
+  const path = `mother_app_revenue_events/${docId}`;
+  const docRef = doc(db, 'mother_app_revenue_events', docId);
+  try {
+    const existing = await getDoc(docRef);
+    if (existing.exists()) return true;
+    await setDoc(docRef, {
+      id: docId,
+      ownerUid: user.uid,
+      motherAppUrl: clampStr(evt.motherAppUrl, 360, 'https://aloof-daily-news-pulse.base44.app/story/6b04f190aa908b27ce284a57'),
+      storyId: storyId.length >= 4 ? storyId : '6b04f190aa908b27ce284a57',
+      streamType: evt.streamType,
+      sourceLabel: clampStr(evt.sourceLabel, 140, 'Base44 Mother App'),
+      grossUsd: Math.max(0.02, Math.min(1000000, Number(evt.grossUsd.toFixed(2)))),
+      creatorNetUsd: Math.max(0.01, Math.min(1000000, Number(evt.creatorNetUsd.toFixed(2)))),
+      withdrawGhs: Math.max(0, Math.min(10000000, Number(evt.withdrawGhs.toFixed(2)))),
+      equivalentSol: Math.max(0, Math.min(50000, Number(evt.equivalentSol.toFixed(4)))),
+      settlementMode: evt.settlementMode,
+      ...(evt.withdrawalId ? { withdrawalId: clampStr(evt.withdrawalId, 128) } : {}),
+      note: clampStr(evt.note, 240, 'Mother App verified monetization settlement'),
+      createdAt: serverTimestamp()
+    });
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function loadMotherAppRevenueEventsFromFirestore(
+  uid: string
+): Promise<MotherAppRevenueEventFirestoreRecord[]> {
+  const path = 'mother_app_revenue_events';
+  try {
+    const q = query(collection(db, path), where('ownerUid', '==', uid), limit(40));
+    const snap = await getDocs(q);
+    const rows = snap.docs.map((d) => {
+      const raw = d.data() as MotherAppRevenueEventFirestoreRecord;
+      const createdIso =
+        raw.createdAt && typeof raw.createdAt === 'object' && 'toDate' in raw.createdAt
+          ? raw.createdAt.toDate().toISOString()
+          : typeof raw.createdAt === 'string'
+            ? raw.createdAt
+            : new Date().toISOString();
+      return {
+        ...raw,
+        createdAt: createdIso
+      };
+    });
+    rows.sort((a, b) => {
+      const ta = typeof a.createdAt === 'string' ? Date.parse(a.createdAt) : 0;
+      const tb = typeof b.createdAt === 'string' ? Date.parse(b.createdAt) : 0;
+      return tb - ta;
+    });
+    return rows;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+
 

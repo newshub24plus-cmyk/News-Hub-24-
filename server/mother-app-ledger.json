@@ -1,0 +1,22 @@
+{
+  "motherAppUrl": "https://aloof-daily-news-pulse.base44.app/story/6b04f190aa908b27ce284a57",
+  "motherOrigin": "https://aloof-daily-news-pulse.base44.app",
+  "storyId": "6b04f190aa908b27ce284a57",
+  "appName": "News Hub 24+ Base44 Mother App",
+  "relationshipRole": "mother_app",
+  "connectedAt": "2026-11-24T03:29:56.169Z",
+  "updatedAt": "2026-11-24T03:30:04.195Z",
+  "lastHandshakeAt": "2026-11-24T03:30:03.611Z",
+  "lastHandshakeStatus": 200,
+  "lastHandshakeOk": true,
+  "verifiedPageTitle": "Article | News Hub 24+",
+  "handshakeError": null,
+  "totalEventsCount": 0,
+  "totalClicksAttributed": 0,
+  "totalWatchSecondsAttributed": 0,
+  "totalGrossUsd": 0,
+  "totalPlatformFeeUsd": 0,
+  "totalCreatorNetUsd": 0,
+  "totalWithdrawnUsd": 0,
+  "events": []
+}

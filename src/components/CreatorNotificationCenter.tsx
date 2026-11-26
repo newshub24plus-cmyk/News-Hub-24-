@@ -32,7 +32,7 @@ export interface CreatorNotificationItem {
   thresholdUsd?: number;
   verifiedRealFunds: boolean;
   referenceId?: string;
-  actionTarget?: '#owner-payouts' | '#analytics' | '#monetization';
+  actionTarget?: '#owner-payouts' | '#analytics' | '#monetization' | '#mother-app';
   read: boolean;
   createdAt: string;
   updatedAt: string;
@@ -246,7 +246,7 @@ export function CreatorNotificationCenter({
     }
   };
 
-  const handleJump = (target?: '#owner-payouts' | '#analytics' | '#monetization') => {
+  const handleJump = (target?: CreatorNotificationItem['actionTarget']) => {
     onClose();
     if (!target) return;
     const el = document.querySelector(target);

@@ -1,0 +1,102 @@
+{
+  "accountMode": "live_production",
+  "sandboxDisabledAt": "2026-11-26T02:25:00.028Z",
+  "accounts": {
+    "OPERATING_CASH_USD": {
+      "id": "OPERATING_CASH_USD",
+      "name": "Operating Cash & Clearing",
+      "category": "asset",
+      "currency": "USD",
+      "apyPercent": 0.5,
+      "balanceUsd": 13.67,
+      "description": "Primary liquid USD operating account awaiting sweep or immediate payout."
+    },
+    "CREATOR_PAYABLE_USD": {
+      "id": "CREATOR_PAYABLE_USD",
+      "name": "Creator & Partner Payable Pool (70%)",
+      "category": "liability",
+      "currency": "USD",
+      "apyPercent": 0,
+      "balanceUsd": 13.67,
+      "description": "Withdrawable owner, YouTube/TikTok creator, and partner earnings liability."
+    },
+    "PLATFORM_RESERVE_USD": {
+      "id": "PLATFORM_RESERVE_USD",
+      "name": "Platform Operating Margin (30%)",
+      "category": "equity",
+      "currency": "USD",
+      "apyPercent": 0,
+      "balanceUsd": 0,
+      "description": "Retained publisher treasury equity after creator revenue share and gateway fees."
+    },
+    "CHARGEBACK_RESERVE_USD": {
+      "id": "CHARGEBACK_RESERVE_USD",
+      "name": "Risk & Dispute Reserve Buffer",
+      "category": "asset",
+      "currency": "USD",
+      "apyPercent": 1.8,
+      "balanceUsd": 0,
+      "description": "Prudential 5% rolling reserve protecting against payment disputes or reversals."
+    },
+    "YIELD_TBILL_POOL_USD": {
+      "id": "YIELD_TBILL_POOL_USD",
+      "name": "USD Treasury Bill / Money-Market Pool",
+      "category": "yield_bucket",
+      "currency": "USD",
+      "apyPercent": 4.85,
+      "balanceUsd": 0,
+      "description": "Short-duration T-bill liquidity reserve earning 4.85% annualized yield."
+    },
+    "SOLANA_STAKING_VAULT_USD": {
+      "id": "SOLANA_STAKING_VAULT_USD",
+      "name": "Solana SOL Liquid Staking Vault",
+      "category": "yield_bucket",
+      "currency": "SOL",
+      "apyPercent": 6.4,
+      "balanceUsd": 0,
+      "description": "On-chain SOL treasury allocation earning 6.40% validator staking APY."
+    },
+    "GHANA_GHS_LIQUIDITY_USD": {
+      "id": "GHANA_GHS_LIQUIDITY_USD",
+      "name": "GhanaPay & MTN MoMo GHS Float",
+      "category": "yield_bucket",
+      "currency": "GHS",
+      "apyPercent": 3.2,
+      "balanceUsd": 0,
+      "description": "Pre-funded GH₵ liquidity float for instant zero-wait MTN MoMo & GhIPSS payouts."
+    }
+  },
+  "policy": {
+    "operatingBufferPct": 25,
+    "usdYieldPoolPct": 40,
+    "solanaVaultPct": 20,
+    "ghsLiquidityPct": 15,
+    "autoSweepEnabled": true,
+    "autoSweepThresholdUsd": 50,
+    "reserveRatioTargetPct": 5,
+    "updatedAt": "2026-11-26T02:25:00.028Z"
+  },
+  "accruedYieldUsd": 0,
+  "lifetimeYieldHarvestedUsd": 0,
+  "lifetimeInflowGrossUsd": 0,
+  "lifetimeProcessorFeesUsd": 0,
+  "lifetimeDisbursedUsd": 0,
+  "entries": [],
+  "lastAudit": {
+    "status": "balanced",
+    "checkedAt": "2026-11-26T02:25:36.310Z",
+    "totalDebitsUsd": 13.67,
+    "totalCreditsUsd": 13.67,
+    "sandboxEntriesDetected": 0,
+    "unreconciledDeltaUsd": 0,
+    "pendingPayoutMatchDeltaUsd": 0,
+    "checksPassed": 4,
+    "checksTotal": 4,
+    "notes": [
+      "Zero sandbox or demo ledger entries detected.",
+      "100%+ creator payout liquidity coverage verified ($13.67 assets vs $13.67 payable).",
+      "Treasury yield allocation weights balanced at exactly 100%.",
+      "Live production settlement enforcement active across all payment rails."
+    ]
+  }
+}

@@ -1601,8 +1601,10 @@ export function CommunityEngagementSection({
                   },
                   {
                     key: 'base44-url',
-                    label: 'Base44 Official App Link',
-                    value: deployStatus?.base44AppUrl ?? 'https://news-hub-24-plus.base44.app'
+                    label: 'Base44 Mother App Link',
+                    value:
+                      deployStatus?.base44AppUrl ??
+                      'https://aloof-daily-news-pulse.base44.app/story/6b04f190aa908b27ce284a57'
                   },
                   {
                     key: 'domain-url',

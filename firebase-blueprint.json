@@ -884,6 +884,206 @@
         "status",
         "createdAt"
       ]
+    },
+    "AirtimeBundleConversion": {
+      "title": "AirtimeBundleConversion",
+      "description": "Owner-isolated immutable record converting mobile airtime/data bundles spent watching publications into verified withdrawable creator revenue.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "publicationId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "publicationTitle": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 240
+        },
+        "publicationType": {
+          "type": "string",
+          "enum": ["article", "video_reel", "investigation", "multi_publication_batch"]
+        },
+        "carrierCode": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 32
+        },
+        "carrierLabel": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "channel": {
+          "type": "string",
+          "enum": ["website", "android_apk", "base44_app"]
+        },
+        "watchMinutes": { "type": "number" },
+        "bundleMbSpent": { "type": "number" },
+        "airtimeSpendUsd": { "type": "number" },
+        "creatorNetUsd": { "type": "number" },
+        "equivalentSol": { "type": "number" },
+        "withdrawGhs": { "type": "number" },
+        "status": {
+          "type": "string",
+          "enum": ["Verified & Credited", "Converted & Withdrawn"]
+        },
+        "settlementMode": {
+          "type": "string",
+          "enum": ["live_configured", "verified_treasury_ledger"]
+        },
+        "withdrawalId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "note": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 240
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "publicationId",
+        "publicationTitle",
+        "publicationType",
+        "carrierCode",
+        "carrierLabel",
+        "channel",
+        "watchMinutes",
+        "bundleMbSpent",
+        "airtimeSpendUsd",
+        "creatorNetUsd",
+        "equivalentSol",
+        "withdrawGhs",
+        "status",
+        "settlementMode",
+        "note",
+        "createdAt"
+      ]
+    },
+    "MotherAppConnection": {
+      "title": "MotherAppConnection",
+      "description": "Verified Base44 Mother App link and live HTTP handshake metadata for News Hub 24+.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "motherAppUrl": { "type": "string", "minLength": 12, "maxLength": 360 },
+        "motherOrigin": { "type": "string", "minLength": 10, "maxLength": 180 },
+        "storyId": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "appName": { "type": "string", "minLength": 3, "maxLength": 140 },
+        "lastHandshakeOk": { "type": "boolean" },
+        "lastHandshakeStatus": { "type": "number" },
+        "verifiedPageTitle": { "type": "string", "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "motherAppUrl",
+        "motherOrigin",
+        "storyId",
+        "appName",
+        "lastHandshakeOk",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "MotherAppRevenueEvent": {
+      "title": "MotherAppRevenueEvent",
+      "description": "Owner-isolated immutable monetization settlement attributed to the Base44 Mother App.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "motherAppUrl": { "type": "string", "minLength": 12, "maxLength": 360 },
+        "storyId": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "streamType": {
+          "type": "string",
+          "enum": [
+            "sponsored_story_slot",
+            "reader_traffic_yield",
+            "subscription_referral",
+            "reader_tip",
+            "live_checkout_settlement",
+            "webhook_event"
+          ]
+        },
+        "sourceLabel": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "grossUsd": { "type": "number" },
+        "creatorNetUsd": { "type": "number" },
+        "withdrawGhs": { "type": "number" },
+        "equivalentSol": { "type": "number" },
+        "settlementMode": {
+          "type": "string",
+          "enum": ["live_configured", "verified_treasury_ledger"]
+        },
+        "withdrawalId": { "type": "string", "maxLength": 128 },
+        "note": { "type": "string", "minLength": 3, "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "motherAppUrl",
+        "storyId",
+        "streamType",
+        "sourceLabel",
+        "grossUsd",
+        "creatorNetUsd",
+        "withdrawGhs",
+        "equivalentSol",
+        "settlementMode",
+        "note",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -938,6 +1138,18 @@
     "/cross_platform_syndications/{syndicationId}": {
       "schema": { "$ref": "#/entities/CrossPlatformSyndication" },
       "description": "Public cross-platform story distribution receipts created by verified admins."
+    },
+    "/airtime_bundle_conversions/{conversionId}": {
+      "schema": { "$ref": "#/entities/AirtimeBundleConversion" },
+      "description": "Owner-isolated immutable airtime/data bundle-to-verified-revenue conversion and payout audit records."
+    },
+    "/mother_app_connections/{connectionId}": {
+      "schema": { "$ref": "#/entities/MotherAppConnection" },
+      "description": "Admin-managed Base44 Mother App connection & live handshake status records."
+    },
+    "/mother_app_revenue_events/{eventId}": {
+      "schema": { "$ref": "#/entities/MotherAppRevenueEvent" },
+      "description": "Owner-isolated immutable verified monetization settlements attributed to the Base44 Mother App."
     }
   }
 }

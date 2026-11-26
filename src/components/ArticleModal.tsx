@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { NewsArticle } from '../data/newsData';
+import { calculateEstimatedReadTime } from '../utils/readingTime';
 import { EditorialImage } from './EditorialImage';
 
 export type ModalReactionKind =
@@ -173,7 +174,7 @@ export function ArticleModal({
             <span aria-hidden="true">·</span>
             <span className="truncate">{article.bureau}</span>
             <span aria-hidden="true">·</span>
-            <span className="font-mono tabular-nums">{article.readTime}</span>
+            <span className="font-mono tabular-nums">{calculateEstimatedReadTime(article).summary}</span>
             <span aria-hidden="true">·</span>
             <span className="font-mono tabular-nums text-[#141413] dark:text-[#F5F3EE]">
               {article.views.toLocaleString()} views

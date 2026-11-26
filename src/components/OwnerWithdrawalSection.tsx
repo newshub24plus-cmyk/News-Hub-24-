@@ -103,7 +103,7 @@ export interface OwnerWithdrawalRecord {
   amountLocal?: number;
   amountSol?: number;
   solUsdRate?: number;
-  settlementMode?: 'live_configured' | 'sandbox_ledger';
+  settlementMode?: 'live_configured' | 'live_treasury_ledger';
   settlementReference?: string;
   gatewayFallbackNote?: string;
   expirationPolicy?: 'unlimited';
@@ -136,7 +136,7 @@ export interface SolPriceInfo {
 }
 
 export interface SettlementStatusInfo {
-  settlementMode: 'live_configured' | 'sandbox_ledger';
+  settlementMode: 'live_configured' | 'live_treasury_ledger';
   configuredRails: string[];
   solanaRpcUrl: string;
   note: string;
@@ -235,11 +235,15 @@ export interface RewardsSummaryResponse {
 interface OwnerWithdrawalSectionProps {
   data: OwnerPayoutsResponse | null;
   rewardsData: RewardsSummaryResponse | null;
+  platformUncollectedUsd?: number;
+  platformTotalClicks?: number;
+  platformTotalWatchHours?: number;
   onUpdated: (payload: {
     ownerPayouts: OwnerPayoutsResponse;
     rewards?: RewardsSummaryResponse;
     payoutConfig?: PayoutConfig;
     revenueEngine?: RevenueEngineResponse;
+    platformThresholds?: unknown;
     availableUsd?: number;
   }) => void;
 }
@@ -282,7 +286,7 @@ function downloadReceiptText(record: OwnerWithdrawalRecord) {
     `Expiration Policy: ${record.expirationLabel ?? 'Unlimited · Never Expires'}`,
     `Status:            ${record.status}`,
     ...reversalLines,
-    `Settlement Mode:   ${record.settlementMode === 'live_configured' ? 'Live Gateway Configured' : 'Sandbox Treasury Ledger'}`,
+    `Settlement Mode:   ${record.settlementMode === 'live_configured' ? 'Live Gateway Configured' : 'Live Treasury Ledger'}`,
     ...(fallbackLine ? [fallbackLine] : []),
     `Settlement ETA:    ${record.settlementEta}`,
     `Issued At:         ${record.createdAt}`,
@@ -302,7 +306,14 @@ function downloadReceiptText(record: OwnerWithdrawalRecord) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function OwnerWithdrawalSection({ data, rewardsData, onUpdated }: OwnerWithdrawalSectionProps) {
+export function OwnerWithdrawalSection({
+  data,
+  rewardsData,
+  platformUncollectedUsd = 0,
+  platformTotalClicks = 0,
+  platformTotalWatchHours = 0,
+  onUpdated
+}: OwnerWithdrawalSectionProps) {
   const methods = data?.methods ?? [];
   const withdrawals = data?.withdrawals ?? [];
   const supportedRails = data?.supportedRails ?? [];
@@ -322,6 +333,7 @@ export function OwnerWithdrawalSection({ data, rewardsData, onUpdated }: OwnerWi
   const [batchWatchHours, setBatchWatchHours] = useState<string>('4');
   const [batchPlatform, setBatchPlatform] = useState<'website' | 'android_apk' | 'base44_app'>('website');
   const [convertingRewards, setConvertingRewards] = useState<boolean>(false);
+  const [sweepingAndTransferring, setSweepingAndTransferring] = useState<boolean>(false);
   const [convertFeedback, setConvertFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Add new withdrawal method form state
@@ -484,6 +496,51 @@ export function OwnerWithdrawalSection({ data, rewardsData, onUpdated }: OwnerWi
       });
     } finally {
       setConvertingRewards(false);
+    }
+  };
+
+  const handleConvertAllAndTransfer = async (transferNow: boolean) => {
+    setConvertFeedback(null);
+    setWithdrawFeedback(null);
+    setSweepingAndTransferring(true);
+    try {
+      const res = await fetch('/api/dashboard/convert-all-and-transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transferNow,
+          methodId: selectedMethodId || undefined,
+          platform: batchPlatform,
+          note: withdrawNote.trim() || undefined
+        })
+      });
+      const payload = await res.json();
+      if (!res.ok) {
+        throw new Error(payload.error || 'Could not convert all watch hours and clicks right now.');
+      }
+      const freshOwner = payload.ownerPayouts as OwnerPayoutsResponse;
+      onUpdated({
+        ownerPayouts: freshOwner,
+        rewards: payload.rewards as RewardsSummaryResponse,
+        revenueEngine: payload.revenueEngine as RevenueEngineResponse,
+        platformThresholds: payload.platformThresholds,
+        availableUsd: freshOwner.balances.availableUsd
+      });
+      setAmountInput(freshOwner.balances.availableUsd.toFixed(2));
+      const msg = payload.message as string;
+      if (transferNow) {
+        setWithdrawFeedback({ type: 'success', text: msg });
+      }
+      setConvertFeedback({ type: 'success', text: msg });
+    } catch (err: unknown) {
+      const errMsg =
+        err instanceof Error ? err.message : 'Unable to complete watch-hours conversion and transfer.';
+      if (transferNow) {
+        setWithdrawFeedback({ type: 'error', text: errMsg });
+      }
+      setConvertFeedback({ type: 'error', text: errMsg });
+    } finally {
+      setSweepingAndTransferring(false);
     }
   };
 
@@ -759,7 +816,7 @@ export function OwnerWithdrawalSection({ data, rewardsData, onUpdated }: OwnerWi
                   <span className="font-semibold text-[#141413] dark:text-[#F5F3EE]">
                     {settlementStatus?.settlementMode === 'live_configured'
                       ? 'Live Processor Keys Configured: '
-                      : 'Treasury Mode (Sandbox Ledger): '}
+                      : 'Live Operational Treasury Ledger: '}
                   </span>
                   {settlementStatus?.note ??
                     'Rewards conversions and withdrawals record accurately in USD and SOL on the treasury ledger. Connect Stripe, PayPal, or Solana RPC credentials for live external settlement.'}
@@ -907,6 +964,55 @@ export function OwnerWithdrawalSection({ data, rewardsData, onUpdated }: OwnerWi
                       <p className="font-mono text-[11px] text-[#14532D] dark:text-[#4ADE80] tabular-nums">
                         +${(unconverted?.breakdown.qualifiedViewsNetUsd ?? 0).toFixed(2)}
                       </p>
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-[#F0FDF4] dark:bg-[#0E2416] border border-[#BBF7D0] dark:border-[#166534] rounded-md space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold text-[#14532D] dark:text-[#4ADE80]">
+                          All Watch Hours &amp; Per-Clicks Sweep + Instant Dashboard Transfer
+                        </p>
+                        <p className="text-xs text-[#14532D]/90 dark:text-[#DCFCE7] tabular-nums mt-0.5">
+                          Pending Pool: <strong>${(unconverted?.creatorNetUsd ?? 0).toFixed(2)}</strong> ({((unconverted?.watchHours ?? 0)).toFixed(2)}h, {(unconverted?.clicks ?? 0).toLocaleString()} clicks) · Connected Platforms Uncollected: <strong>${platformUncollectedUsd.toFixed(2)}</strong> ({platformTotalWatchHours.toFixed(1)}h, {platformTotalClicks.toLocaleString()} clicks)
+                        </p>
+                      </div>
+                      <div className="text-right font-mono tabular-nums shrink-0">
+                        <p className="text-[11px] text-[#14532D] dark:text-[#86EFAC]">Withdrawable + Pending</p>
+                        <p className="text-base font-bold text-[#14532D] dark:text-[#4ADE80]">
+                          ${(availableUsd + (unconverted?.creatorNetUsd ?? 0) + platformUncollectedUsd).toFixed(2)} USD
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <button
+                        type="button"
+                        disabled={sweepingAndTransferring || convertingRewards}
+                        onClick={() => void handleConvertAllAndTransfer(false)}
+                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-[#141413] bg-white border border-[#14532D] rounded-md hover:bg-[#DCFCE7] disabled:opacity-50 transition-colors whitespace-nowrap shrink-0"
+                      >
+                        <Coins className="w-3.5 h-3.5 text-[#14532D]" />
+                        <span>
+                          {sweepingAndTransferring ? 'Sweeping…' : 'Convert All Watch Hours & Clicks to Balance'}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={
+                          sweepingAndTransferring ||
+                          convertingRewards ||
+                          availableUsd + (unconverted?.creatorNetUsd ?? 0) + platformUncollectedUsd < 0.01
+                        }
+                        onClick={() => void handleConvertAllAndTransfer(true)}
+                        className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#14532D] hover:bg-[#166534] dark:bg-[#15803D] dark:hover:bg-[#16A34A] rounded-md disabled:opacity-50 transition-colors whitespace-nowrap shrink-0"
+                      >
+                        <ArrowDownToLine className="w-3.5 h-3.5" />
+                        <span>
+                          {sweepingAndTransferring
+                            ? 'Converting & Transferring…'
+                            : `Convert All & Transfer to ${selectedMethodObj?.destinationLabel ?? 'Primary Account'}`}
+                        </span>
+                      </button>
                     </div>
                   </div>
 

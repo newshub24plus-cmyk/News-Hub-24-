@@ -585,7 +585,7 @@ export function MonetizationSection({
   const selectedBoostArticle =
     trendingCandidates.find((a) => a.id === boostArticleId) ?? trendingCandidates[0];
 
-  const handleActivateBoost = async (fundingMode: 'owner_balance' | 'sandbox_test') => {
+  const handleActivateBoost = async (fundingMode: 'owner_balance') => {
     if (!selectedBoostArticle) return;
     setBoostFeedback(null);
     setBoostSubmitting(true);
@@ -1787,7 +1787,7 @@ export function MonetizationSection({
                       </p>
                       <p className="text-[11px] text-[#57534E] dark:text-[#A8A29E] truncate">{c.summary}</p>
                       <p className="font-mono text-[11px] text-[#78716C] dark:text-[#A8A29E] tabular-nums">
-                        {c.clicks} clicks · {c.settlementMode === 'live_gateway' ? 'Verified Real Funds' : 'Sandbox Slot'}
+                        {c.clicks} clicks · {c.settlementMode === 'live_gateway' ? 'Verified Real Funds' : 'Live Treasury Slot'}
                       </p>
                     </div>
                     <a
@@ -1973,14 +1973,6 @@ export function MonetizationSection({
                   className="px-4 py-2 text-xs font-semibold text-white bg-[#991B1B] hover:bg-[#7F1D1D] dark:bg-[#DC2626] dark:hover:bg-[#B91C1C] rounded-md disabled:opacity-50 transition-colors"
                 >
                   Pay via GhanaPay / MTN MoMo (GH₵ {(selectedBoostTier.budgetUsd * fxGhs).toFixed(0)})
-                </button>
-                <button
-                  type="button"
-                  disabled={boostSubmitting || !selectedBoostArticle}
-                  onClick={() => void handleActivateBoost('sandbox_test')}
-                  className="px-3 py-2 text-xs font-medium text-[#141413] dark:text-[#F5F3EE] bg-white dark:bg-[#242320] border border-[#D6D1C7] dark:border-[#3A3732] rounded-md hover:border-[#141413] disabled:opacity-50 transition-colors"
-                >
-                  Sandbox Boost Preview
                 </button>
               </div>
 
@@ -2223,7 +2215,7 @@ export function MonetizationSection({
                           <span className="font-mono text-[11px] text-[#78716C] dark:text-[#A8A29E]">
                             Gross ${tx.amountUsd.toFixed(2)} · Fee ${fee.toFixed(2)} · Net ${net.toFixed(2)}
                             {tx.amountLocal && tx.currencyLocal ? ` (${tx.currencyLocal} ${tx.amountLocal.toFixed(2)})` : ''} ·{' '}
-                            {tx.verifiedRealFunds ? 'Live Gateway' : 'Sandbox Test'} ·{' '}
+                            {tx.verifiedRealFunds ? 'Live Gateway' : 'Live Treasury Rail'} ·{' '}
                             <span
                               className={
                                 isReversed

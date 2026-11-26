@@ -1,6 +1,7 @@
 import { ArrowRight, BookOpen, Globe, Mail, X } from 'lucide-react';
 import { useEffect, useMemo } from 'react';
 import { resolveAuthorProfile, type NewsArticle } from '../data/newsData';
+import { calculateEstimatedReadTime } from '../utils/readingTime';
 
 export interface SelectedAuthorTarget {
   name: string;
@@ -224,6 +225,10 @@ export function AuthorProfileDrawer({
                         <time dateTime={story.publishedAt} className="font-mono tabular-nums">
                           {story.displayDate}
                         </time>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-mono tabular-nums">
+                          {calculateEstimatedReadTime(story).shortLabel}
+                        </span>
                         <span aria-hidden="true">·</span>
                         <span className="font-mono tabular-nums">
                           {story.views.toLocaleString()} views

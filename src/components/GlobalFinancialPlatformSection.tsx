@@ -174,7 +174,24 @@ interface UssdReceipt {
   amountGhs: number;
   reference: string;
   summary: string;
+  settlementMode?: 'live_momo_api' | 'live_airtime_api' | 'live_ghanapay_api' | 'verified_treasury_ledger';
+  providerChannel?: string;
+  verifiedRealFunds?: boolean;
   createdAt: string;
+}
+
+interface UssdGatewayStatus {
+  shortcode: string;
+  liveMode: boolean;
+  callbackEndpoint: string;
+  mtnMomoConfigured: boolean;
+  ghanaPayConfigured: boolean;
+  flutterwaveConfigured: boolean;
+  reloadlyConfigured: boolean;
+  africasTalkingConfigured: boolean;
+  webhookConfigured: boolean;
+  activeChannels: string[];
+  merchantNumber: string;
 }
 
 interface GlobalFinancialPlatformSectionProps {
@@ -253,10 +270,13 @@ export function GlobalFinancialPlatformSection({
     { key: '*789*1#', label: '*789*1# Send Money' },
     { key: '*789*2#', label: '*789*2# Airtime' },
     { key: '*789*3#', label: '*789*3# Subs & Ads' },
-    { key: '*789*6#', label: '*789*6# Pay 0557711975' }
+    { key: '*789*6#', label: '*789*6# Pay 0557711975' },
+    { key: '*789*7#', label: '*789*7# Creator Payout' }
   ]);
   const [ussdInput, setUssdInput] = useState<string>('*789#');
   const [dialingUssd, setDialingUssd] = useState<boolean>(false);
+  const [ussdGatewayStatus, setUssdGatewayStatus] = useState<UssdGatewayStatus | null>(null);
+  const [copiedCallback, setCopiedCallback] = useState<boolean>(false);
 
   // Tab 4: Customer Background / KYC Onboarding State
   const [kycFullName, setKycFullName] = useState<string>('');
@@ -287,11 +307,12 @@ export function GlobalFinancialPlatformSection({
   const loadAllPlatformState = useCallback(async () => {
     setLoadingInitial(true);
     try {
-      const [kycRes, corrRes, airRes, ussdRes] = await Promise.all([
+      const [kycRes, corrRes, airRes, ussdRes, ussdStatusRes] = await Promise.all([
         fetch('/api/kyc/profiles'),
         fetch('/api/remittance/corridors'),
         fetch('/api/airtime/catalog'),
-        fetch('/api/ussd/sessions')
+        fetch('/api/ussd/sessions'),
+        fetch('/api/ussd/status')
       ]);
 
       if (kycRes.ok) {
@@ -331,6 +352,11 @@ export function GlobalFinancialPlatformSection({
       if (ussdRes.ok) {
         const uj = (await ussdRes.json()) as { receipts?: UssdReceipt[] };
         if (Array.isArray(uj.receipts)) setUssdReceipts(uj.receipts);
+      }
+
+      if (ussdStatusRes.ok) {
+        const stj = (await ussdStatusRes.json()) as UssdGatewayStatus;
+        setUssdGatewayStatus(stj);
       }
     } catch {
       // Initial catalog errors are handled gracefully per tab
@@ -1641,7 +1667,8 @@ export function GlobalFinancialPlatformSection({
                     { code: '*789*3#', desc: 'Activate Subscriptions & Commercial Ad Boosts' },
                     { code: '*789*4#', desc: 'Check Customer KYC Limit & Creator Balance' },
                     { code: '*789*5#', desc: 'Track MTCN Remittance or Withdrawal Reference' },
-                    { code: '*789*6#', desc: 'Pay News Hub 24+ Merchant (0557711975) / 3rd-Party' }
+                    { code: '*789*6#', desc: 'Pay News Hub 24+ Merchant (0557711975) / 3rd-Party' },
+                    { code: '*789*7#', desc: 'Instant Creator Payout to Primary MoMo / Wallet' }
                   ].map((item) => (
                     <div key={item.code} className="px-4 py-2.5 flex items-center justify-between gap-2">
                       <div>
@@ -1659,6 +1686,56 @@ export function GlobalFinancialPlatformSection({
                       </button>
                     </div>
                   ))}
+                </div>
+              </div>
+
+              {/* Live Telecom Carrier & Gateway Readiness Strip */}
+              <div className="p-4 bg-white dark:bg-[#171715] border border-[#E5E2DC] dark:border-[#2C2A26] rounded-lg space-y-2.5 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-semibold text-[#141413] dark:text-[#F5F3EE]">
+                    Live *789# Carrier &amp; Telecom Gateway Readiness
+                  </span>
+                  <span className="font-mono text-[11px] font-semibold text-[#14532D] dark:text-[#4ADE80]">
+                    {ussdGatewayStatus?.liveMode ? 'LIVE CARRIER API ACTIVE' : 'CARRIER WEBHOOK & TREASURY READY'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 font-mono text-[11px]">
+                  {[
+                    { label: 'MTN MoMo', ok: ussdGatewayStatus?.mtnMomoConfigured },
+                    { label: 'GhanaPay', ok: ussdGatewayStatus?.ghanaPayConfigured },
+                    { label: 'Flutterwave', ok: ussdGatewayStatus?.flutterwaveConfigured },
+                    { label: 'Reloadly', ok: ussdGatewayStatus?.reloadlyConfigured },
+                    { label: "Africa's Talking", ok: ussdGatewayStatus?.africasTalkingConfigured }
+                  ].map((rail) => (
+                    <span
+                      key={rail.label}
+                      className={`px-2 py-0.5 rounded border ${
+                        rail.ok
+                          ? 'bg-[#F0FDF4] dark:bg-[#0E2416] text-[#14532D] dark:text-[#4ADE80] border-[#BBF7D0] dark:border-[#166534]'
+                          : 'bg-[#F5F2EB] dark:bg-[#1C1B19] text-[#57534E] dark:text-[#A8A29E] border-[#E5E2DC] dark:border-[#2C2A26]'
+                      }`}
+                    >
+                      {rail.label}: {rail.ok ? 'LIVE' : 'Treasury Ready'}
+                    </span>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#E5E2DC] dark:border-[#2C2A26]">
+                  <span className="font-mono text-[11px] text-[#57534E] dark:text-[#A8A29E] truncate">
+                    Telecom Callback: {typeof window !== 'undefined' ? window.location.origin : ''}/api/ussd/789/callback
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = `${typeof window !== 'undefined' ? window.location.origin : ''}/api/ussd/789/callback`;
+                      void navigator.clipboard.writeText(url).then(() => {
+                        setCopiedCallback(true);
+                        window.setTimeout(() => setCopiedCallback(false), 1800);
+                      });
+                    }}
+                    className="px-2.5 py-1 text-[11px] font-medium bg-[#F5F2EB] dark:bg-[#242320] border border-[#D6D1C7] dark:border-[#3A3732] rounded-sm shrink-0"
+                  >
+                    {copiedCallback ? 'Copied' : 'Copy Webhook'}
+                  </button>
                 </div>
               </div>
 
@@ -1684,7 +1761,7 @@ export function GlobalFinancialPlatformSection({
                             {r.service} · {r.msisdn}
                           </p>
                           <p className="font-mono text-[11px] text-[#57534E] dark:text-[#A8A29E] truncate">
-                            {r.id} · {r.summary}
+                            {r.id} · {r.providerChannel ?? (r.verifiedRealFunds ? 'Live Carrier API' : 'Verified Treasury Rail')} · {r.summary}
                           </p>
                         </div>
                         <div className="text-right font-mono tabular-nums shrink-0">

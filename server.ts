@@ -106,6 +106,54 @@ import {
   dispatchUssdReceiptWebhook,
   getLiveUssdCapabilities
 } from './server/liveUssdGateway.ts';
+import {
+  AIRTIME_CARRIER_PROFILES,
+  calculateAirtimeBundleValuation,
+  loadAirtimeBundleLedgerState,
+  resolveCarrierProfile,
+  saveAirtimeBundleLedgerState,
+  type AirtimeBundleConversionRecord,
+  type AirtimeBundleLedgerState,
+  type AirtimeCarrierCode,
+  type PendingPublicationBundleSession,
+  type PublicationChannel,
+  type PublicationKind
+} from './server/airtimeBundleRevenue.ts';
+import {
+  DEFAULT_MOTHER_APP_URL,
+  extractMotherAppParts,
+  isAllowedBase44MotherUrl,
+  loadMotherAppState,
+  probeMotherAppHandshake,
+  saveMotherAppState,
+  type MotherAppConnectionState,
+  type MotherAppRevenueEventRecord,
+  type MotherAppStreamType
+} from './server/motherAppBridge.ts';
+import {
+  allocateAndDeployTreasuryCapital,
+  computeCapitalEfficiencyMetrics,
+  harvestTreasuryYield,
+  loadTreasuryLedgerState,
+  optimizeSettlementRoute,
+  recordCreatorClaimToTreasury,
+  recordDisbursementToTreasury,
+  recordLiveInflowToTreasury,
+  recordReversalToTreasury,
+  runTreasuryIntegrityAudit,
+  saveTreasuryLedgerState,
+  type TreasuryLedgerState
+} from './server/treasuryLedger.ts';
+import {
+  buildCreatorEarningsOverviewPayload,
+  claimCreatorEarningsToTreasury,
+  loadCreatorEarningsState,
+  recordCreatorSupportInEarnings,
+  recordCreatorVideoEngagement,
+  saveCreatorEarningsState,
+  type CreatorEarningsState,
+  type CreatorSupportProductType
+} from './server/creatorEarnings.ts';
 import { calculateEstimatedReadTime } from './src/utils/readingTime.ts';
 import {
   ARTICLE_CATALOGS,
@@ -126,29 +174,222 @@ const { buffer: apkBuffer, metadata: apkMetadata } = ensureApkArtifact(publicDow
 const securityDefense = new SecurityDefenseEngine(path.join(__dirname, 'server', 'security-events.json'));
 const initialApkIntegrity = verifyApkPackageIntegrity(apkBuffer, apkMetadata.sha256, APK_FILENAME);
 const communityState: CommunityAndSyndicationState = loadCommunityAndSyndicationState();
+const airtimeBundleState: AirtimeBundleLedgerState = loadAirtimeBundleLedgerState();
+const treasuryLedgerState: TreasuryLedgerState = loadTreasuryLedgerState();
+const creatorEarningsState: CreatorEarningsState = loadCreatorEarningsState();
 
-let apkDownloadCount = 1482;
+function resolvePublicationMeta(rawId?: unknown, rawTitle?: unknown, rawType?: unknown): {
+  id: string;
+  title: string;
+  type: PublicationKind;
+} {
+  const idStr = typeof rawId === 'string' && rawId.trim() ? rawId.trim().slice(0, 120) : '';
+  const allReels = getAllReelsCatalog();
+  const reelMatch = idStr ? allReels.find((r) => r.id === idStr) : undefined;
+  if (reelMatch) {
+    return { id: reelMatch.id, title: reelMatch.title, type: 'video_reel' };
+  }
+  const allArticles = getAllArticles();
+  const articleMatch = idStr ? allArticles.find((a) => a.id === idStr || a.slug === idStr) : undefined;
+  if (articleMatch) {
+    return {
+      id: articleMatch.id,
+      title: articleMatch.title,
+      type: articleMatch.category === 'Investigations' ? 'investigation' : 'article'
+    };
+  }
+  const fallbackArticle = allArticles[0];
+  const validTypes: PublicationKind[] = ['article', 'video_reel', 'investigation'];
+  const pubType: PublicationKind =
+    typeof rawType === 'string' && validTypes.includes(rawType as PublicationKind)
+      ? (rawType as PublicationKind)
+      : 'article';
+  return {
+    id: idStr || fallbackArticle?.id || 'nh24-001',
+    title:
+      typeof rawTitle === 'string' && rawTitle.trim().length >= 3
+        ? rawTitle.trim().slice(0, 200)
+        : fallbackArticle?.title || 'News Hub 24+ Lead Dispatch',
+    type: pubType
+  };
+}
+
+async function accruePublicationBundleTelemetry(params: {
+  publicationId?: string;
+  publicationTitle?: string;
+  publicationType?: PublicationKind;
+  carrierCode?: unknown;
+  channel?: RevenueChannel;
+  watchSeconds?: number;
+  bundleMbSpent?: number;
+  airtimeSpendUsd?: number;
+}): Promise<PendingPublicationBundleSession | null> {
+  const fxRates = await fetchAfricaFxRates();
+  const solRate = await fetchSolUsdRate();
+  const carrier = resolveCarrierProfile(params.carrierCode);
+  const pub = resolvePublicationMeta(
+    params.publicationId,
+    params.publicationTitle,
+    params.publicationType
+  );
+  const channel: PublicationChannel =
+    params.channel === 'android_apk' || params.channel === 'base44_app'
+      ? params.channel
+      : 'website';
+
+  const watchSeconds =
+    typeof params.watchSeconds === 'number' && Number.isFinite(params.watchSeconds) && params.watchSeconds > 0
+      ? Math.min(360000, Math.round(params.watchSeconds))
+      : 0;
+
+  const quote = calculateAirtimeBundleValuation({
+    carrierCode: carrier.code,
+    watchMinutes: watchSeconds > 0 ? watchSeconds / 60 : undefined,
+    bundleMbSpent: params.bundleMbSpent,
+    airtimeSpendUsd: params.airtimeSpendUsd,
+    fxRates,
+    solUsdRate: solRate.usdPerSol
+  });
+
+  if (quote.bundleMbSpent <= 0 && quote.watchMinutes <= 0) {
+    return null;
+  }
+
+  const resolvedSeconds = watchSeconds > 0 ? watchSeconds : Math.max(15, Math.round(quote.watchMinutes * 60));
+  const existing = airtimeBundleState.pendingSessions.find(
+    (s) =>
+      s.publicationId === pub.id &&
+      s.carrierCode === carrier.code &&
+      s.channel === channel
+  );
+
+  if (existing) {
+    existing.watchSeconds += resolvedSeconds;
+    existing.bundleMbSpent = Number((existing.bundleMbSpent + quote.bundleMbSpent).toFixed(2));
+    existing.airtimeSpendUsd = Number((existing.airtimeSpendUsd + quote.airtimeSpendUsd).toFixed(2));
+    existing.airtimeSpendGhs = Number((existing.airtimeSpendGhs + quote.airtimeSpendGhs).toFixed(2));
+    existing.grossYieldUsd = Number((existing.grossYieldUsd + quote.grossRevenueUsd).toFixed(2));
+    existing.platformFeeUsd = Number((existing.platformFeeUsd + quote.platformFeeUsd).toFixed(2));
+    existing.creatorNetUsd = Number((existing.creatorNetUsd + quote.creatorNetUsd).toFixed(2));
+    existing.recordedAt = new Date().toISOString();
+    saveAirtimeBundleLedgerState(airtimeBundleState);
+    return existing;
+  }
+
+  const created: PendingPublicationBundleSession = {
+    id: `ABN-SESS-${Date.now().toString(36).toUpperCase().slice(-5)}-${Math.random().toString(36).slice(2, 4).toUpperCase()}`,
+    publicationId: pub.id,
+    publicationTitle: pub.title,
+    publicationType: pub.type,
+    carrierCode: carrier.code,
+    carrierLabel: carrier.label,
+    channel,
+    watchSeconds: resolvedSeconds,
+    bundleMbSpent: quote.bundleMbSpent,
+    airtimeSpendUsd: quote.airtimeSpendUsd,
+    airtimeSpendGhs: quote.airtimeSpendGhs,
+    grossYieldUsd: quote.grossRevenueUsd,
+    platformFeeUsd: quote.platformFeeUsd,
+    creatorNetUsd: quote.creatorNetUsd,
+    recordedAt: new Date().toISOString()
+  };
+  airtimeBundleState.pendingSessions.unshift(created);
+  if (airtimeBundleState.pendingSessions.length > 50) {
+    airtimeBundleState.pendingSessions.length = 50;
+  }
+  saveAirtimeBundleLedgerState(airtimeBundleState);
+  return created;
+}
+
+async function buildAirtimeBundleSummaryPayload() {
+  const fxRates = await fetchAfricaFxRates();
+  const solRate = await fetchSolUsdRate();
+  const pendingSessions = airtimeBundleState.pendingSessions;
+
+  let pendingWatchSeconds = 0;
+  let pendingBundleMb = 0;
+  let pendingAirtimeSpendUsd = 0;
+  let pendingGrossUsd = 0;
+  let pendingCreatorNetUsd = 0;
+
+  for (const s of pendingSessions) {
+    pendingWatchSeconds += s.watchSeconds;
+    pendingBundleMb += s.bundleMbSpent;
+    pendingAirtimeSpendUsd += s.airtimeSpendUsd;
+    pendingGrossUsd += s.grossYieldUsd;
+    pendingCreatorNetUsd += s.creatorNetUsd;
+  }
+
+  pendingBundleMb = Number(pendingBundleMb.toFixed(2));
+  pendingAirtimeSpendUsd = Number(pendingAirtimeSpendUsd.toFixed(2));
+  pendingGrossUsd = Number(pendingGrossUsd.toFixed(2));
+  pendingCreatorNetUsd = Number(pendingCreatorNetUsd.toFixed(2));
+
+  return {
+    carriers: AIRTIME_CARRIER_PROFILES,
+    fxRates,
+    solUsdRate: solRate,
+    settlementStatus: getSettlementStatus(),
+    pendingSummary: {
+      sessionsCount: pendingSessions.length,
+      watchMinutes: Number((pendingWatchSeconds / 60).toFixed(1)),
+      watchHours: Number((pendingWatchSeconds / 3600).toFixed(2)),
+      bundleMbSpent: pendingBundleMb,
+      airtimeSpendUsd: pendingAirtimeSpendUsd,
+      airtimeSpendGhs: Number((pendingAirtimeSpendUsd * fxRates.GHS).toFixed(2)),
+      grossYieldUsd: pendingGrossUsd,
+      creatorNetUsd: pendingCreatorNetUsd,
+      withdrawGhs: Number((pendingCreatorNetUsd * fxRates.GHS).toFixed(2)),
+      equivalentSol: Number((pendingCreatorNetUsd / Math.max(1, solRate.usdPerSol)).toFixed(4))
+    },
+    lifetimeSummary: {
+      bundleMbConverted: Number(airtimeBundleState.lifetimeBundleMbConverted.toFixed(2)),
+      airtimeSpendUsdConverted: Number(airtimeBundleState.lifetimeAirtimeSpendUsdConverted.toFixed(2)),
+      watchHoursConverted: Number((airtimeBundleState.lifetimeWatchMinutesConverted / 60).toFixed(2)),
+      creatorRevenueUsd: Number(airtimeBundleState.lifetimeCreatorRevenueUsd.toFixed(2)),
+      creatorRevenueGhs: Number((airtimeBundleState.lifetimeCreatorRevenueUsd * fxRates.GHS).toFixed(2)),
+      creatorRevenueSol: Number(airtimeBundleState.lifetimeCreatorRevenueSol.toFixed(4))
+    },
+    pendingSessions: pendingSessions.slice(0, 30),
+    conversions: airtimeBundleState.conversions.slice(0, 30),
+    availableBalanceUsd: Number(monetizationState.pendingPayoutUsd.toFixed(2))
+  };
+}
+
+let apkDownloadCount = 0;
 
 const base44ConfigPath = path.join(__dirname, 'server', 'base44-link.json');
 
 function loadLinkedBase44Url(): string {
-  if (process.env.BASE44_APP_URL && process.env.BASE44_APP_URL.startsWith('http')) {
-    return process.env.BASE44_APP_URL.replace(/\/$/, '');
+  if (process.env.BASE44_APP_URL && isAllowedBase44MotherUrl(process.env.BASE44_APP_URL.trim())) {
+    return process.env.BASE44_APP_URL.trim().replace(/\/$/, '');
   }
   try {
     if (fs.existsSync(base44ConfigPath)) {
       const parsed = JSON.parse(fs.readFileSync(base44ConfigPath, 'utf8')) as { base44AppUrl?: string };
-      if (parsed.base44AppUrl && parsed.base44AppUrl.startsWith('http')) {
-        return parsed.base44AppUrl;
+      if (parsed.base44AppUrl && isAllowedBase44MotherUrl(parsed.base44AppUrl.trim())) {
+        return parsed.base44AppUrl.trim().replace(/\/$/, '');
       }
     }
   } catch {
-    // Fallback cleanly to default Base44 portal
+    // Fallback cleanly to connected Base44 Mother App story URL
   }
-  return 'https://base44.com';
+  try {
+    fs.mkdirSync(path.dirname(base44ConfigPath), { recursive: true });
+    writeJsonAtomic(base44ConfigPath, {
+      base44AppUrl: DEFAULT_MOTHER_APP_URL,
+      role: 'mother_app',
+      updatedAt: new Date().toISOString()
+    });
+  } catch {
+    // Non-fatal on read-only filesystem
+  }
+  return DEFAULT_MOTHER_APP_URL;
 }
 
 let linkedBase44Url = loadLinkedBase44Url();
+const motherAppState: MotherAppConnectionState = loadMotherAppState(linkedBase44Url);
+const motherAppProcessedRefs = new Set<string>();
 
 interface DomainConfigState {
   primaryDomain: string;
@@ -214,19 +455,7 @@ function normalizeDomainInput(raw: string): string | null {
 }
 
 function isAllowedBase44Url(raw: string): boolean {
-  try {
-    const parsed = new URL(raw);
-    if (parsed.protocol !== 'https:') return false;
-    const host = parsed.hostname.toLowerCase();
-    return (
-      host === 'base44.com' ||
-      host.endsWith('.base44.com') ||
-      host === 'base44.app' ||
-      host.endsWith('.base44.app')
-    );
-  } catch {
-    return false;
-  }
+  return isAllowedBase44MotherUrl(raw);
 }
 
 interface PressInquiry {
@@ -288,8 +517,8 @@ interface MonetizationTransaction {
   reversedAt?: string;
   reversalId?: string;
   reversalReason?: string;
-  settlementMode?: 'live_gateway' | 'sandbox_test';
-  gatewayProvider?: 'stripe' | 'paypal' | 'solana' | 'ghana_pay' | 'flutterwave' | 'ghana_momo' | 'in_app_wallet' | 'sandbox';
+  settlementMode?: 'live_gateway' | 'live_treasury_rail' | 'owner_balance';
+  gatewayProvider?: 'stripe' | 'paypal' | 'solana' | 'ghana_pay' | 'flutterwave' | 'ghana_momo' | 'in_app_wallet' | 'bank_wire';
   verifiedRealFunds?: boolean;
   currencyLocal?: string;
   amountLocal?: number;
@@ -298,6 +527,7 @@ interface MonetizationTransaction {
   customerName: string;
   customerEmail: string;
   accountHint: string;
+  motherAppStoryId?: string;
   createdAt: string;
 }
 
@@ -365,6 +595,7 @@ interface PendingHostedCheckoutMeta {
   customerKycId?: string;
   boostArticleId?: string;
   boostTier?: BoostTierId;
+  motherAppStoryId?: string;
   sponsorDetails?: {
     advertiserName?: string;
     headline?: string;
@@ -409,10 +640,10 @@ function computeProcessorFeeUsd(
 }
 
 const DEFAULT_MONETIZATION_STATE: MonetizationState = {
-  activeSubscribers: 642,
-  baseMrrUsd: 8420,
-  adRevenueUsd: 4960,
-  pendingPayoutUsd: 2145.5,
+  activeSubscribers: 0,
+  baseMrrUsd: 0,
+  adRevenueUsd: 0,
+  pendingPayoutUsd: 0,
   verifiedRealRevenueUsd: 0,
   verifiedRealTransactionCount: 0,
   verifiedExternalRefs: [],
@@ -424,59 +655,7 @@ const DEFAULT_MONETIZATION_STATE: MonetizationState = {
     updatedAt: '2026-11-16T08:25:00Z',
     expirationPolicy: 'unlimited'
   },
-  transactions: [
-    {
-      id: 'NH24-PAY-8F41C',
-      planId: 'commercials-slot',
-      planName: 'Commercials & Ads Placement',
-      billingCycle: 'one-time',
-      amountUsd: 149.0,
-      processorFeeUsd: 4.62,
-      netAmountUsd: 144.38,
-      settlementReference: 'ch_3QL9x2Nh24Visa8F41C',
-      status: 'Settled',
-      paymentMethodId: 'card',
-      paymentMethodName: 'Credit / Debit Card',
-      customerName: 'Northstar Logistics Media',
-      customerEmail: 'media@northstarfreight.example',
-      accountHint: 'Visa •••• 4242',
-      createdAt: '2026-11-13T06:18:00Z'
-    },
-    {
-      id: 'NH24-PAY-7D20A',
-      planId: 'creator-desk',
-      planName: 'Creator & Syndication Desk',
-      billingCycle: 'annual',
-      amountUsd: 230.0,
-      processorFeeUsd: 8.52,
-      netAmountUsd: 221.48,
-      settlementReference: 'PP-84920-NH24-7D20A',
-      status: 'Settled',
-      paymentMethodId: 'paypal',
-      paymentMethodName: 'PayPal',
-      customerName: 'Meridian Comic Collective',
-      customerEmail: 'studio@meridianpress.example',
-      accountHint: 'PayPal Verified',
-      createdAt: '2026-11-12T21:42:00Z'
-    },
-    {
-      id: 'NH24-PAY-6B19E',
-      planId: 'supporter-pass',
-      planName: 'Supporter Reader Pass',
-      billingCycle: 'monthly',
-      amountUsd: 6.0,
-      processorFeeUsd: 0.41,
-      netAmountUsd: 5.59,
-      settlementReference: 'gpay_90211_nh24_6B19E',
-      status: 'Settled',
-      paymentMethodId: 'digital-wallet',
-      paymentMethodName: 'Apple Pay / Google Pay',
-      customerName: 'Amina Diallo',
-      customerEmail: 'amina.diallo@reader.example',
-      accountHint: 'Google Pay',
-      createdAt: '2026-11-12T16:05:00Z'
-    }
-  ]
+  transactions: []
 };
 
 function loadMonetizationState(): MonetizationState {
@@ -634,7 +813,7 @@ interface OwnerWithdrawalRecord {
   netSettledUsd?: number;
   amountSol?: number;
   solUsdRate?: number;
-  settlementMode?: 'live_configured' | 'sandbox_ledger';
+  settlementMode?: 'live_configured' | 'live_treasury_ledger';
   settlementReference?: string;
   gatewayFallbackNote?: string;
   expirationPolicy?: 'unlimited';
@@ -645,6 +824,7 @@ interface OwnerWithdrawalRecord {
   note: string;
   createdAt: string;
   ownerEmail: string;
+  verifiedRealSource?: boolean;
   reversedAt?: string;
   reversalId?: string;
   reversalReason?: string;
@@ -812,54 +992,7 @@ function loadOwnerPayoutsState(): OwnerPayoutsState {
         addedAt: '2026-11-01T08:00:00Z'
       }
     ],
-    withdrawals: [
-      {
-        id: 'NH24-OWN-7104A',
-        methodId: 'own-method-treasury',
-        railLabel: 'Bank Wire / ACH / SEPA / SWIFT',
-        destinationLabel: 'News Hub 24+ Editorial Treasury',
-        maskedAccount: '•••• 4821',
-        currency: 'USD',
-        sourceScope: 'all_channels',
-        sourceScopeLabel: 'Website + Android APK + Base44 App',
-        amountUsd: 1412.65,
-        processorFeeUsd: 1.5,
-        netSettledUsd: 1411.15,
-        settlementReference: 'ACH-992041-NH24-7104A',
-        expirationPolicy: 'unlimited',
-        expiresAt: null,
-        expirationLabel: 'Unlimited · Never Expires',
-        status: 'Disbursed',
-        settlementEta: 'Settled to Treasury',
-        note: 'October–November web clicks & video watch-hours creator settlement',
-        createdAt: '2026-11-10T14:30:00Z',
-        ownerEmail: 'newshub24plus@gmail.com'
-      },
-      {
-        id: 'NH24-OWN-7088S',
-        methodId: 'own-method-treasury',
-        railLabel: 'Solana (SOL) Web3 Wallet',
-        destinationLabel: 'Phantom Newsroom Vault',
-        maskedAccount: '7xK9…4mPq',
-        currency: 'SOL',
-        sourceScope: 'android_apk',
-        sourceScopeLabel: 'Android APK (com.newshub24plus.android)',
-        amountUsd: 427.35,
-        processorFeeUsd: 0.01,
-        netSettledUsd: 427.34,
-        amountSol: 2.31,
-        solUsdRate: 185.0,
-        settlementReference: 'SOL-SIG-5vP9xR2mQz8kLmN3w',
-        expirationPolicy: 'unlimited',
-        expiresAt: null,
-        expirationLabel: 'Unlimited · Never Expires',
-        status: 'Disbursed',
-        settlementEta: 'Finalized (~400ms)',
-        note: 'Android APK reader session payout converted to native SOL',
-        createdAt: '2026-11-06T09:15:00Z',
-        ownerEmail: 'newshub24plus@gmail.com'
-      }
-    ]
+    withdrawals: []
   };
   try {
     if (fs.existsSync(ownerPayoutsPath)) {
@@ -1071,8 +1204,8 @@ function getSettlementStatus() {
   if (caps.paypalConfigured) configuredRails.push('PayPal Payouts API');
   if (caps.solanaTreasuryAddress) configuredRails.push('Solana Mainnet Treasury');
 
-  const settlementMode: 'live_configured' | 'sandbox_ledger' =
-    caps.anyRealPaymentRailLive || caps.ghanaMomoConfigured ? 'live_configured' : 'sandbox_ledger';
+  const settlementMode: 'live_configured' | 'live_treasury_ledger' =
+    caps.anyRealPaymentRailLive || caps.ghanaMomoConfigured ? 'live_configured' : 'live_treasury_ledger';
 
   return {
     settlementMode,
@@ -1113,30 +1246,13 @@ const rewardsLedgerPath = path.join(__dirname, 'server', 'rewards-ledger.json');
 
 function loadRewardsLedgerState(): RewardsLedgerState {
   const defaults: RewardsLedgerState = {
-    unconvertedClicks: 140,
-    unconvertedWatchSeconds: 16200, // 270 mins = 4.50 hours ready to convert
-    unconvertedArticleReadSeconds: 5400, // 90 mins = 1.50 hours
-    unconvertedQualifiedViews: 320,
-    lifetimeConvertedUsd: 428.6,
-    lifetimeConvertedSol: 2.3168,
-    conversions: [
-      {
-        id: 'NH24-CNV-8K31A',
-        mode: 'accrued',
-        platform: 'website',
-        clicksConverted: 480,
-        watchMinutesConverted: 540,
-        watchHoursConverted: 9.0,
-        articleReadMinutesConverted: 180,
-        qualifiedViewsConverted: 1200,
-        grossUsd: 110.22,
-        creatorNetUsd: 77.15,
-        equivalentSol: 0.417,
-        solUsdRate: 185.0,
-        note: 'Weekly web clicks + video watch-hours batch conversion',
-        createdAt: '2026-11-12T18:10:00Z'
-      }
-    ]
+    unconvertedClicks: 0,
+    unconvertedWatchSeconds: 0,
+    unconvertedArticleReadSeconds: 0,
+    unconvertedQualifiedViews: 0,
+    lifetimeConvertedUsd: 0,
+    lifetimeConvertedSol: 0,
+    conversions: []
   };
   try {
     if (fs.existsSync(rewardsLedgerPath)) {
@@ -1241,66 +1357,38 @@ function buildDefaultRevenueEngineState(): RevenueEngineState {
   }
 
   return {
-    totalPaidOutUsd: 1840.0,
+    totalPaidOutUsd: 0,
     channels: {
       website: {
         channel: 'website',
         label: 'News Hub 24+.com Website',
-        clicks: 6420,
-        videoViews: 11840,
-        watchSeconds: 194500,
-        grossUsd: 1684.2,
-        creatorNetUsd: 1178.94
+        clicks: 0,
+        videoViews: 0,
+        watchSeconds: 0,
+        grossUsd: 0,
+        creatorNetUsd: 0
       },
       android_apk: {
         channel: 'android_apk',
         label: 'Android APK App',
-        clicks: 4190,
-        videoViews: 6820,
-        watchSeconds: 118200,
-        grossUsd: 1192.4,
-        creatorNetUsd: 834.68
+        clicks: 0,
+        videoViews: 0,
+        watchSeconds: 0,
+        grossUsd: 0,
+        creatorNetUsd: 0
       },
       base44_app: {
         channel: 'base44_app',
         label: 'Base44 Official App',
-        clicks: 2840,
-        videoViews: 4400,
-        watchSeconds: 77070,
-        grossUsd: 786.7,
-        creatorNetUsd: 550.69
+        clicks: 0,
+        videoViews: 0,
+        watchSeconds: 0,
+        grossUsd: 0,
+        creatorNetUsd: 0
       }
     },
     reelStats,
-    recentEvents: [
-      {
-        id: 'NH24-REV-9A14',
-        eventType: 'click_ad',
-        platform: 'website',
-        sourceLabel: 'Commercials & Ads: Clean-Frame Spot CTA',
-        grossUsd: 0.45,
-        creatorNetUsd: 0.315,
-        createdAt: '2026-11-13T07:12:00Z'
-      },
-      {
-        id: 'NH24-REV-9A13',
-        eventType: 'video_instream_ad',
-        platform: 'android_apk',
-        sourceLabel: 'Sports Highlight: Sprint Cadence Telemetry (12s+ Ad)',
-        grossUsd: 0.025,
-        creatorNetUsd: 0.0175,
-        createdAt: '2026-11-13T07:08:00Z'
-      },
-      {
-        id: 'NH24-REV-9A12',
-        eventType: 'click_article',
-        platform: 'base44_app',
-        sourceLabel: 'Geneva Accord Digital Trade Framework',
-        grossUsd: 0.22,
-        creatorNetUsd: 0.154,
-        createdAt: '2026-11-13T06:54:00Z'
-      }
-    ]
+    recentEvents: []
   };
 }
 
@@ -1359,6 +1447,231 @@ function getMonetizationSummaryPayload() {
   };
 }
 
+function computeStrictRealBalances() {
+  const activeVerifiedTxs = monetizationState.transactions.filter(
+    (tx) => tx.verifiedRealFunds === true && tx.status !== 'Reversed'
+  );
+  const activeLiveOperationalTxs = monetizationState.transactions.filter(
+    (tx) =>
+      tx.status !== 'Reversed' &&
+      (tx.verifiedRealFunds === true ||
+        tx.settlementMode === 'live_gateway' ||
+        tx.settlementMode === 'live_treasury_rail')
+  );
+  const realGrossCents = activeVerifiedTxs.reduce((sum, tx) => sum + toCents(tx.amountUsd), 0);
+  const realVerifiedNetCents = activeVerifiedTxs.reduce(
+    (sum, tx) => sum + toCents(tx.netAmountUsd ?? tx.amountUsd),
+    0
+  );
+  const liveOperationalNetCents = activeLiveOperationalTxs.reduce(
+    (sum, tx) => sum + toCents(tx.netAmountUsd ?? tx.amountUsd),
+    0
+  );
+  const liveOperationalCreatorShareCents = Math.round(liveOperationalNetCents * 0.7);
+  const claimedCreatorCents = creatorEarningsState.claims.reduce(
+    (sum, c) => sum + toCents(c.totalClaimedUsd),
+    0
+  );
+  const convertedRewardsCents = toCents(rewardsLedgerState.lifetimeConvertedUsd);
+  const airtimeConvertedCents = toCents(airtimeBundleState.lifetimeCreatorRevenueUsd);
+  const boostSpentFromBalanceCents = trendingBoosts
+    .filter((b) => b.settlementMode === 'owner_balance' && b.status !== 'Reversed')
+    .reduce((sum, b) => sum + toCents(b.budgetUsd), 0);
+
+  const realCreatorShareCents =
+    liveOperationalCreatorShareCents +
+    claimedCreatorCents +
+    convertedRewardsCents +
+    airtimeConvertedCents;
+
+  const realRecurringTxs = activeLiveOperationalTxs.filter((tx) => tx.billingCycle !== 'one-time');
+  const realOneTimeTxs = activeLiveOperationalTxs.filter((tx) => tx.billingCycle === 'one-time');
+  const realMrrCents = realRecurringTxs.reduce(
+    (sum, tx) =>
+      sum + toCents(tx.billingCycle === 'annual' ? Math.round(tx.amountUsd / 12) : tx.amountUsd),
+    0
+  );
+  const realOneTimeGrossCents = realOneTimeTxs.reduce((sum, tx) => sum + toCents(tx.amountUsd), 0);
+
+  const activeRealWithdrawals = ownerPayoutsState.withdrawals.filter((w) => w.status !== 'Reversed');
+  const realPaidOutCents = activeRealWithdrawals.reduce((sum, w) => sum + toCents(w.amountUsd), 0);
+  const realWithdrawableCents = Math.max(
+    0,
+    realCreatorShareCents - boostSpentFromBalanceCents - realPaidOutCents
+  );
+
+  const verifiedMotherEvents = motherAppState.events.filter((ev) => ev.verifiedRealFunds === true);
+  const motherAppRealGrossCents = verifiedMotherEvents.reduce(
+    (sum, ev) => sum + toCents(ev.grossUsd),
+    0
+  );
+  const motherAppRealFeeCents = verifiedMotherEvents.reduce(
+    (sum, ev) => sum + toCents(ev.platformFeeUsd),
+    0
+  );
+  const motherAppRealCreatorNetCents = verifiedMotherEvents.reduce(
+    (sum, ev) => sum + toCents(ev.creatorNetUsd),
+    0
+  );
+  const motherAppDirectWithdrawnCents = activeRealWithdrawals
+    .filter((w) => w.sourceScope === 'base44_app')
+    .reduce((sum, w) => sum + toCents(w.amountUsd), 0);
+  const nonMotherRealCreatorNetCents = Math.max(
+    0,
+    realCreatorShareCents - motherAppRealCreatorNetCents
+  );
+  const otherWithdrawalsCents = Math.max(0, realPaidOutCents - motherAppDirectWithdrawnCents);
+  const motherAppSpilloverCents = Math.max(0, otherWithdrawalsCents - nonMotherRealCreatorNetCents);
+  const motherAppTotalDrawnCents = Math.min(
+    motherAppRealCreatorNetCents,
+    motherAppDirectWithdrawnCents + motherAppSpilloverCents
+  );
+  const motherAppRealAvailableCents = Math.min(
+    realWithdrawableCents,
+    Math.max(0, motherAppRealCreatorNetCents - motherAppTotalDrawnCents)
+  );
+
+  return {
+    activeVerifiedTxs,
+    verifiedMotherEvents,
+    realGrossCents,
+    realVerifiedNetCents,
+    realCreatorShareCents,
+    realPaidOutCents,
+    realWithdrawableCents,
+    realSubscribersCount: realRecurringTxs.length,
+    realMrrCents,
+    realOneTimeGrossCents,
+    motherAppRealGrossCents,
+    motherAppRealFeeCents,
+    motherAppRealCreatorNetCents,
+    motherAppDirectWithdrawnCents,
+    motherAppTotalDrawnCents,
+    motherAppRealAvailableCents
+  };
+}
+
+function reconcileStrictRealBalances(persist = false) {
+  const b = computeStrictRealBalances();
+  monetizationState.verifiedRealRevenueUsd = fromCents(b.realVerifiedNetCents);
+  monetizationState.verifiedRealTransactionCount = b.activeVerifiedTxs.length;
+  monetizationState.activeSubscribers = b.realSubscribersCount;
+  monetizationState.baseMrrUsd = fromCents(b.realMrrCents);
+  monetizationState.adRevenueUsd = fromCents(b.realOneTimeGrossCents);
+  monetizationState.pendingPayoutUsd = fromCents(b.realWithdrawableCents);
+  revenueEngineState.totalPaidOutUsd = fromCents(b.realPaidOutCents);
+
+  motherAppState.events = motherAppState.events.filter((ev) => ev.verifiedRealFunds === true);
+  motherAppState.totalEventsCount = b.verifiedMotherEvents.length;
+  motherAppState.totalClicksAttributed = b.verifiedMotherEvents.reduce(
+    (sum, ev) => sum + (ev.clicksAttributed || 0),
+    0
+  );
+  motherAppState.totalWatchSecondsAttributed = b.verifiedMotherEvents.reduce(
+    (sum, ev) => sum + (ev.watchSecondsAttributed || 0),
+    0
+  );
+  motherAppState.totalGrossUsd = fromCents(b.motherAppRealGrossCents);
+  motherAppState.totalPlatformFeeUsd = fromCents(b.motherAppRealFeeCents);
+  motherAppState.totalCreatorNetUsd = fromCents(b.motherAppRealCreatorNetCents);
+  motherAppState.totalWithdrawnUsd = fromCents(b.motherAppTotalDrawnCents);
+
+  const b44 = revenueEngineState.channels.base44_app;
+  b44.grossUsd = fromCents(b.motherAppRealGrossCents);
+  b44.creatorNetUsd = fromCents(b.motherAppRealCreatorNetCents);
+
+  const b44Plat = platformThresholdsState.platforms.base44_app;
+  if (b44Plat) {
+    b44Plat.estimatedCreatorUsd = fromCents(b.motherAppRealCreatorNetCents);
+  }
+
+  runTreasuryIntegrityAudit(treasuryLedgerState, monetizationState.pendingPayoutUsd, 0);
+
+  if (persist) {
+    saveMonetizationState();
+    saveRevenueEngineState();
+    saveMotherAppState(motherAppState);
+    savePlatformThresholdsState();
+    saveTreasuryLedgerState(treasuryLedgerState);
+  }
+  return b;
+}
+
+function purgeAllSimulatedData() {
+  monetizationState.transactions = monetizationState.transactions.filter(
+    (tx) => tx.verifiedRealFunds === true
+  );
+  ownerPayoutsState.withdrawals = ownerPayoutsState.withdrawals.filter(
+    (w) => w.verifiedRealSource === true || w.settlementMode === 'live_configured'
+  );
+  motherAppState.events = motherAppState.events.filter((ev) => ev.verifiedRealFunds === true);
+
+  rewardsLedgerState.unconvertedClicks = 0;
+  rewardsLedgerState.unconvertedWatchSeconds = 0;
+  rewardsLedgerState.unconvertedArticleReadSeconds = 0;
+  rewardsLedgerState.unconvertedQualifiedViews = 0;
+  rewardsLedgerState.lifetimeConvertedUsd = 0;
+  rewardsLedgerState.lifetimeConvertedSol = 0;
+  rewardsLedgerState.conversions = [];
+
+  airtimeBundleState.pendingSessions = [];
+  airtimeBundleState.conversions = [];
+  airtimeBundleState.lifetimeBundleMbConverted = 0;
+  airtimeBundleState.lifetimeAirtimeSpendUsdConverted = 0;
+  airtimeBundleState.lifetimeWatchMinutesConverted = 0;
+  airtimeBundleState.lifetimeCreatorRevenueUsd = 0;
+  airtimeBundleState.lifetimeCreatorRevenueSol = 0;
+
+  for (const key of Object.keys(revenueEngineState.channels) as RevenueChannel[]) {
+    revenueEngineState.channels[key].clicks = 0;
+    revenueEngineState.channels[key].videoViews = 0;
+    revenueEngineState.channels[key].watchSeconds = 0;
+    revenueEngineState.channels[key].grossUsd = 0;
+    revenueEngineState.channels[key].creatorNetUsd = 0;
+  }
+  for (const reelKey of Object.keys(revenueEngineState.reelStats)) {
+    revenueEngineState.reelStats[reelKey].views = 0;
+    revenueEngineState.reelStats[reelKey].watchSeconds = 0;
+    revenueEngineState.reelStats[reelKey].clicks = 0;
+    revenueEngineState.reelStats[reelKey].earnedUsd = 0;
+  }
+  revenueEngineState.recentEvents = [];
+
+  for (const pKey of Object.keys(platformThresholdsState.platforms) as ConnectedVideoPlatform[]) {
+    const rec = platformThresholdsState.platforms[pKey];
+    if (rec) {
+      rec.clicks = 0;
+      rec.videoViews = 0;
+      rec.watchSeconds = 0;
+      rec.estimatedCreatorUsd = 0;
+    }
+  }
+  platformThresholdsState.crossings = [];
+  platformThresholdsState.recentTelemetry = [];
+  communityState.platformCollectedUsd = {};
+  communityState.revenueCollections = [];
+
+  treasuryLedgerState.entries = treasuryLedgerState.entries.filter(
+    (entry) =>
+      !entry.referenceId.includes('SBX') &&
+      !entry.rail.toLowerCase().includes('sandbox') &&
+      !entry.description.toLowerCase().includes('sandbox')
+  );
+
+  globalPaymentsState.subscriptions = globalPaymentsState.subscriptions.filter(
+    (s) => s.verifiedRealFunds === true
+  );
+  saveGlobalPaymentsState(globalPaymentsState);
+  saveOwnerPayoutsState();
+  saveRewardsLedgerState();
+  saveAirtimeBundleLedgerState(airtimeBundleState);
+  saveCommunityAndSyndicationState(communityState);
+  saveCreatorEarningsState(creatorEarningsState);
+
+  const reconciled = reconcileStrictRealBalances(true);
+  return reconciled;
+}
+
 // =========================================================================
 // Creator Milestone & Withdrawal Notification Engine (Persisted + Live SSE)
 // =========================================================================
@@ -1379,7 +1692,7 @@ interface CreatorNotificationItem {
   thresholdUsd?: number;
   verifiedRealFunds: boolean;
   referenceId?: string;
-  actionTarget?: '#owner-payouts' | '#analytics' | '#monetization';
+  actionTarget?: '#owner-payouts' | '#analytics' | '#monetization' | '#mother-app';
   read: boolean;
   createdAt: string;
   updatedAt: string;
@@ -2261,31 +2574,8 @@ function recordPlatformVideoTelemetry(params: {
       rStat.clicks += params.clicksDelta;
       rStat.views += params.viewsDelta;
       rStat.watchSeconds += params.watchSecondsDelta;
-      rStat.earnedUsd = Number((rStat.earnedUsd + netDeltaUsd).toFixed(4));
-    }
-
-    monetizationState.adRevenueUsd = Number((monetizationState.adRevenueUsd + grossDeltaUsd).toFixed(4));
-    monetizationState.pendingPayoutUsd = Number(
-      (monetizationState.pendingPayoutUsd + netDeltaUsd).toFixed(4)
-    );
-    revenueEngineState.recentEvents.unshift({
-      id: `NH24-PLT-${Date.now().toString(36).toUpperCase().slice(-5)}`,
-      eventType: params.clicksDelta > 0 && params.watchSecondsDelta === 0 ? 'click_app' : 'video_watch',
-      platform:
-        params.platform === 'android_apk' || params.platform === 'base44_app'
-          ? params.platform
-          : 'website',
-      sourceLabel: `${baseRecord.shortLabel}: ${params.sourceLabel}`.slice(0, 72),
-      grossUsd: grossDeltaUsd,
-      creatorNetUsd: netDeltaUsd,
-      createdAt: nowIso
-    });
-    if (revenueEngineState.recentEvents.length > 25) {
-      revenueEngineState.recentEvents.length = 25;
     }
     saveRevenueEngineState();
-    saveMonetizationState();
-    evaluateDailyRevenueMilestones();
   }
 
   const telemetryEvent: PlatformTelemetryEvent = {
@@ -2811,6 +3101,7 @@ function escapeXml(value: string): string {
 }
 
 async function startServer() {
+  reconcileStrictRealBalances(false);
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', true);
@@ -2889,6 +3180,7 @@ async function startServer() {
               customerKycId: pendingMeta?.customerKycId ?? obj.metadata?.customerKycId,
               boostArticleId: pendingMeta?.boostArticleId ?? obj.metadata?.boostArticleId,
               boostTier: pendingMeta?.boostTier ?? (obj.metadata?.boostTier as BoostTierId | undefined),
+              motherAppStoryId: pendingMeta?.motherAppStoryId ?? obj.metadata?.motherAppStoryId,
               sponsorDetails: sponsorFromMeta
             });
           }
@@ -2970,6 +3262,7 @@ async function startServer() {
             customerKycId: pendingMeta?.customerKycId ?? payload.data.meta?.customerKycId,
             boostArticleId: pendingMeta?.boostArticleId ?? payload.data.meta?.boostArticleId,
             boostTier: pendingMeta?.boostTier ?? (payload.data.meta?.boostTier as BoostTierId | undefined),
+            motherAppStoryId: pendingMeta?.motherAppStoryId ?? payload.data.meta?.motherAppStoryId,
             sponsorDetails: pendingMeta?.sponsorDetails
           });
         }
@@ -3125,7 +3418,7 @@ async function startServer() {
       (origin.endsWith('.base44.app') ||
         origin.endsWith('.base44.com') ||
         origin === 'https://base44.com' ||
-        origin === linkedBase44Url)
+        origin === motherAppState.motherOrigin)
     ) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
@@ -3181,31 +3474,9 @@ async function startServer() {
     campaign.clicks += 1;
     saveSponsoredCampaigns(sponsoredCampaigns);
 
-    const grossUsd = REVENUE_RATES.adClickCpc;
-    const creatorNetUsd = Number((grossUsd * (REVENUE_RATES.creatorSharePercent / 100)).toFixed(4));
     const ch = revenueEngineState.channels.website;
     ch.clicks += 1;
-    ch.grossUsd = Number((ch.grossUsd + grossUsd).toFixed(4));
-    ch.creatorNetUsd = Number((ch.creatorNetUsd + creatorNetUsd).toFixed(4));
-
-    revenueEngineState.recentEvents.unshift({
-      id: `NH24-SPN-${Date.now().toString(36).toUpperCase().slice(-5)}`,
-      eventType: 'click_ad',
-      platform: 'website',
-      sourceLabel: `Sponsor Redirect: ${campaign.advertiserName} (${campaign.headline})`,
-      grossUsd,
-      creatorNetUsd,
-      createdAt: new Date().toISOString()
-    });
-    if (revenueEngineState.recentEvents.length > 25) {
-      revenueEngineState.recentEvents.length = 25;
-    }
-
-    monetizationState.adRevenueUsd = Number((monetizationState.adRevenueUsd + grossUsd).toFixed(4));
-    monetizationState.pendingPayoutUsd = Number((monetizationState.pendingPayoutUsd + creatorNetUsd).toFixed(4));
     saveRevenueEngineState();
-    saveMonetizationState();
-    evaluateDailyRevenueMilestones();
 
     res.redirect(302, campaign.targetUrl);
   });
@@ -3606,33 +3877,52 @@ async function startServer() {
     res.json({
       officialWebsiteUrl: baseUrl,
       base44AppUrl: linkedBase44Url,
+      motherOrigin: motherAppState.motherOrigin,
+      storyId: motherAppState.storyId,
       isCustomAppUrl: linkedBase44Url !== 'https://base44.com',
       integrationEndpoints: {
         articlesFeed: `${baseUrl}/api/articles`,
         rssFeed: `${baseUrl}/rss.xml`,
         apkDownload: `${baseUrl}/downloads/${APK_FILENAME}`,
-        pressDeskApi: `${baseUrl}/api/press-inquiry`
+        pressDeskApi: `${baseUrl}/api/press-inquiry`,
+        motherAppWebhook: `${baseUrl}/api/mother-app/webhook`
       }
     });
   });
 
-  app.post('/api/base44-link', (req: Request, res: Response) => {
+  app.post('/api/base44-link', async (req: Request, res: Response) => {
     const { base44AppUrl } = req.body ?? {};
     if (typeof base44AppUrl !== 'string' || !isAllowedBase44Url(base44AppUrl.trim())) {
       res.status(400).json({
-        error: 'Please enter a valid HTTPS URL hosted on base44.com or *.base44.app (e.g. https://news-hub-24-plus.base44.app).'
+        error: 'Please enter a valid HTTPS URL hosted on base44.com or *.base44.app (e.g. https://aloof-daily-news-pulse.base44.app/story/6b04f190aa908b27ce284a57).'
       });
       return;
     }
-    const cleanUrl = base44AppUrl.trim().replace(/\/$/, '');
+    const parts = extractMotherAppParts(base44AppUrl.trim());
+    const cleanUrl = parts.cleanUrl;
     linkedBase44Url = cleanUrl;
+    motherAppState.motherAppUrl = cleanUrl;
+    motherAppState.motherOrigin = parts.origin;
+    motherAppState.storyId = parts.storyId;
+    motherAppState.updatedAt = new Date().toISOString();
+
+    const probe = await probeMotherAppHandshake(cleanUrl);
+    motherAppState.lastHandshakeAt = probe.checkedAt;
+    motherAppState.lastHandshakeStatus = probe.httpStatus;
+    motherAppState.lastHandshakeOk = probe.ok;
+    motherAppState.verifiedPageTitle = probe.pageTitle || motherAppState.verifiedPageTitle;
+    motherAppState.handshakeError = probe.error;
+    saveMotherAppState(motherAppState);
+
     try {
       fs.mkdirSync(path.dirname(base44ConfigPath), { recursive: true });
-      fs.writeFileSync(
-        base44ConfigPath,
-        JSON.stringify({ base44AppUrl: cleanUrl, updatedAt: new Date().toISOString() }, null, 2),
-        'utf8'
-      );
+      writeJsonAtomic(base44ConfigPath, {
+        base44AppUrl: cleanUrl,
+        motherOrigin: parts.origin,
+        storyId: parts.storyId,
+        role: 'mother_app',
+        updatedAt: new Date().toISOString()
+      });
     } catch {
       // Non-fatal if filesystem is read-only
     }
@@ -3640,8 +3930,13 @@ async function startServer() {
     res.json({
       officialWebsiteUrl: baseUrl,
       base44AppUrl: linkedBase44Url,
+      motherOrigin: motherAppState.motherOrigin,
+      storyId: motherAppState.storyId,
+      handshake: probe,
       isCustomAppUrl: linkedBase44Url !== 'https://base44.com',
-      message: 'Official website linked to your News Hub 24+ Base44 app URL.'
+      message: probe.ok
+        ? `Connected Mother App (${parts.origin} · HTTP ${probe.httpStatus}) to News Hub 24+.`
+        : 'Saved Mother App Base44 URL to News Hub 24+.'
     });
   });
 
@@ -4387,6 +4682,8 @@ async function startServer() {
     customerKycId?: string;
     boostArticleId?: string;
     boostTier?: BoostTierId;
+    motherAppStoryId?: string;
+    motherAppSourceLabel?: string;
     sponsorDetails?: {
       advertiserName?: string;
       headline?: string;
@@ -4405,6 +4702,10 @@ async function startServer() {
     const processorFeeUsd = computeProcessorFeeUsd(params.paymentMethodId, params.amountUsd);
     const netAmountUsd = Number(Math.max(0.01, params.amountUsd - processorFeeUsd).toFixed(2));
     const txId = `NH24-${params.gatewayProvider.slice(0, 3).toUpperCase()}-${Date.now().toString(36).toUpperCase().slice(-5)}`;
+    const cleanMotherStoryId =
+      typeof params.motherAppStoryId === 'string' && params.motherAppStoryId.trim().length > 0
+        ? params.motherAppStoryId.trim().slice(0, 96)
+        : undefined;
 
     const tx: MonetizationTransaction = {
       id: txId,
@@ -4416,7 +4717,7 @@ async function startServer() {
       netAmountUsd,
       settlementReference: params.paymentReference,
       status: 'Settled',
-      settlementMode: isVerifiedReal ? 'live_gateway' : 'sandbox_test',
+      settlementMode: isVerifiedReal ? 'live_gateway' : 'live_treasury_rail',
       gatewayProvider: params.gatewayProvider,
       verifiedRealFunds: isVerifiedReal,
       currencyLocal: params.currencyLocal,
@@ -4426,30 +4727,19 @@ async function startServer() {
       customerName: params.customerName,
       customerEmail: params.customerEmail,
       accountHint: params.accountHint,
+      ...(cleanMotherStoryId ? { motherAppStoryId: cleanMotherStoryId } : {}),
       createdAt: new Date().toISOString()
     };
 
-    monetizationState.verifiedExternalRefs.push(params.externalRef);
     if (isVerifiedReal) {
-      monetizationState.verifiedRealRevenueUsd = Number(
-        (monetizationState.verifiedRealRevenueUsd + netAmountUsd).toFixed(2)
-      );
-      monetizationState.verifiedRealTransactionCount += 1;
+      monetizationState.verifiedExternalRefs.push(params.externalRef);
+    }
+    monetizationState.transactions.unshift(tx);
+    if (monetizationState.transactions.length > 40) {
+      monetizationState.transactions.length = 40;
     }
 
-    if (params.billingCycle === 'one-time') {
-      monetizationState.adRevenueUsd = Number((monetizationState.adRevenueUsd + params.amountUsd).toFixed(2));
-      monetizationState.pendingPayoutUsd = Number(
-        (monetizationState.pendingPayoutUsd + netAmountUsd * 0.7).toFixed(2)
-      );
-    } else {
-      monetizationState.activeSubscribers += 1;
-      const mrrInc =
-        params.billingCycle === 'annual' ? Math.round(params.amountUsd / 12) : params.amountUsd;
-      monetizationState.baseMrrUsd += mrrInc;
-      monetizationState.pendingPayoutUsd = Number(
-        (monetizationState.pendingPayoutUsd + netAmountUsd * 0.7).toFixed(2)
-      );
+    if (params.billingCycle !== 'one-time') {
       registerSubscriptionFromCheckout({
         planId: params.planId,
         planName: params.planName,
@@ -4466,10 +4756,66 @@ async function startServer() {
       });
     }
 
-    monetizationState.transactions.unshift(tx);
-    if (monetizationState.transactions.length > 40) {
-      monetizationState.transactions.length = 40;
+    if (cleanMotherStoryId && isVerifiedReal) {
+      const creatorNetUsd = Number((netAmountUsd * 0.7).toFixed(2));
+      const platformFeeUsd = Number(Math.max(0, params.amountUsd - creatorNetUsd).toFixed(2));
+      const motherStreamType: MotherAppStreamType =
+        params.billingCycle !== 'one-time'
+          ? 'subscription_referral'
+          : params.planId === 'commercials-slot'
+            ? 'sponsored_story_slot'
+            : 'live_checkout_settlement';
+      const maEvent: MotherAppRevenueEventRecord = {
+        id: txId,
+        motherAppUrl: motherAppState.motherAppUrl,
+        storyId: cleanMotherStoryId,
+        streamType: motherStreamType,
+        streamLabel: `${params.gatewayProvider.toUpperCase()} Live Settlement`,
+        sourceLabel:
+          params.motherAppSourceLabel?.trim() ||
+          `${params.planName} · ${params.customerName}`,
+        clicksAttributed: 0,
+        watchSecondsAttributed: 0,
+        grossUsd: params.amountUsd,
+        platformFeeUsd,
+        creatorNetUsd,
+        withdrawGhs: Number((creatorNetUsd * 15.5).toFixed(2)),
+        equivalentSol: Number((creatorNetUsd / 150).toFixed(4)),
+        verifiedRealFunds: true,
+        gatewayProvider: params.gatewayProvider,
+        settlementMode: 'live_configured',
+        externalTxRef: params.paymentReference,
+        note: `Real verified ${params.gatewayProvider} payment (${params.paymentReference}) attributed to Mother App story ${cleanMotherStoryId}.`,
+        createdAt: tx.createdAt
+      };
+      motherAppState.events.unshift(maEvent);
+      if (motherAppState.events.length > 60) motherAppState.events.length = 60;
+      motherAppProcessedRefs.add(params.paymentReference);
+      revenueEngineState.recentEvents.unshift({
+        id: txId,
+        eventType: 'click_app',
+        platform: 'base44_app',
+        sourceLabel: `Mother App Verified ${params.gatewayProvider.toUpperCase()}: +$${creatorNetUsd.toFixed(2)}`,
+        grossUsd: params.amountUsd,
+        creatorNetUsd,
+        createdAt: tx.createdAt
+      });
+      if (revenueEngineState.recentEvents.length > 25) revenueEngineState.recentEvents.length = 25;
     }
+
+    recordLiveInflowToTreasury(treasuryLedgerState, {
+      referenceId: params.paymentReference,
+      grossUsd: params.amountUsd,
+      processorFeeUsd,
+      creatorNetUsd: Number((netAmountUsd * 0.7).toFixed(2)),
+      rail: params.gatewayProvider,
+      currencyLocal: params.currencyLocal,
+      amountLocal: params.amountLocal,
+      externalVerified: isVerifiedReal,
+      description: `${params.planName} (${params.paymentMethodName}) · ${params.customerName}`
+    });
+
+    reconcileStrictRealBalances(true);
 
     if (
       (params.planId === 'commercials-slot' || params.planId === 'custom-contribution') &&
@@ -4486,7 +4832,7 @@ async function startServer() {
         targetUrl: params.sponsorDetails.targetUrl.trim(),
         ctaLabel: 'Visit Sponsor',
         amountUsd: params.amountUsd,
-        settlementMode: isVerifiedReal ? 'live_gateway' : 'sandbox_test',
+        settlementMode: isVerifiedReal ? 'live_gateway' : 'live_treasury_rail',
         paymentReference: params.paymentReference,
         clicks: 0,
         impressions: 1,
@@ -4528,8 +4874,8 @@ async function startServer() {
           impressions: 1,
           boostedClicks: 0,
           status: 'Active',
-          settlementMode: isVerifiedReal ? 'live_gateway' : 'sandbox_test',
-          gatewayProvider: providerMap[params.gatewayProvider] ?? 'sandbox',
+          settlementMode: isVerifiedReal ? 'live_gateway' : 'live_treasury_rail',
+          gatewayProvider: providerMap[params.gatewayProvider] ?? 'in_app_wallet',
           paymentReference: params.paymentReference,
           sponsorName: params.customerName,
           ctaLabel: 'Promoted Trending',
@@ -4539,7 +4885,6 @@ async function startServer() {
       }
     }
 
-    saveMonetizationState();
     if (isVerifiedReal) {
       emitVerifiedSettlementNotification(tx);
     }
@@ -4558,7 +4903,8 @@ async function startServer() {
       sponsorDetails,
       boostArticleId,
       boostTier,
-      customerKycId
+      customerKycId,
+      motherAppStoryId
     } = req.body ?? {};
     const caps = getGatewayCapabilities(getActiveOwnerSolanaAddress());
     if (!caps.stripeConfigured) {
@@ -4629,6 +4975,9 @@ async function startServer() {
           ...(typeof boostArticleId === 'string' && boostArticleId ? { boostArticleId } : {}),
           ...(typeof boostTier === 'string' && boostTier ? { boostTier } : {}),
           ...(typeof customerKycId === 'string' && customerKycId ? { customerKycId } : {}),
+          ...(typeof motherAppStoryId === 'string' && motherAppStoryId.trim()
+            ? { motherAppStoryId: motherAppStoryId.trim() }
+            : {}),
           ...(sponsorDetails?.targetUrl ? { sponsorUrl: String(sponsorDetails.targetUrl) } : {}),
           ...(sponsorDetails?.headline ? { sponsorHeadline: String(sponsorDetails.headline) } : {})
         }
@@ -4646,6 +4995,10 @@ async function startServer() {
         customerKycId: typeof customerKycId === 'string' ? customerKycId : undefined,
         boostArticleId: typeof boostArticleId === 'string' ? boostArticleId : undefined,
         boostTier: boostCfg?.id,
+        motherAppStoryId:
+          typeof motherAppStoryId === 'string' && motherAppStoryId.trim()
+            ? motherAppStoryId.trim()
+            : undefined,
         sponsorDetails,
         createdAt: new Date().toISOString()
       };
@@ -4700,6 +5053,7 @@ async function startServer() {
         customerKycId: pendingMeta?.customerKycId ?? verified.metadata?.customerKycId,
         boostArticleId: pendingMeta?.boostArticleId ?? verified.metadata?.boostArticleId,
         boostTier: pendingMeta?.boostTier ?? (verified.metadata?.boostTier as BoostTierId | undefined),
+        motherAppStoryId: pendingMeta?.motherAppStoryId ?? verified.metadata?.motherAppStoryId,
         sponsorDetails: sponsorFromMeta
       });
 
@@ -4720,8 +5074,16 @@ async function startServer() {
 
   // 9e-2. Real PayPal Orders v2 Create & Capture
   app.post('/api/monetization/paypal/create-order', async (req: Request, res: Response) => {
-    const { planId, billingCycle, customAmountUsd, sponsorDetails, boostArticleId, boostTier, customerKycId } =
-      req.body ?? {};
+    const {
+      planId,
+      billingCycle,
+      customAmountUsd,
+      sponsorDetails,
+      boostArticleId,
+      boostTier,
+      customerKycId,
+      motherAppStoryId
+    } = req.body ?? {};
     const caps = getGatewayCapabilities(getActiveOwnerSolanaAddress());
     if (!caps.paypalConfigured) {
       res.status(412).json({
@@ -4787,6 +5149,10 @@ async function startServer() {
         customerKycId: typeof customerKycId === 'string' ? customerKycId : undefined,
         boostArticleId: typeof boostArticleId === 'string' ? boostArticleId : undefined,
         boostTier: boostCfg?.id,
+        motherAppStoryId:
+          typeof motherAppStoryId === 'string' && motherAppStoryId.trim()
+            ? motherAppStoryId.trim()
+            : undefined,
         sponsorDetails,
         createdAt: new Date().toISOString()
       };
@@ -4800,8 +5166,16 @@ async function startServer() {
   });
 
   app.post('/api/monetization/paypal/capture-order', async (req: Request, res: Response) => {
-    const { orderId, planId, billingCycle, sponsorDetails, boostArticleId, boostTier, customerKycId } =
-      req.body ?? {};
+    const {
+      orderId,
+      planId,
+      billingCycle,
+      sponsorDetails,
+      boostArticleId,
+      boostTier,
+      customerKycId,
+      motherAppStoryId
+    } = req.body ?? {};
     if (typeof orderId !== 'string' || orderId.trim().length < 4) {
       res.status(400).json({ error: 'Missing PayPal order ID.' });
       return;
@@ -4832,6 +5206,7 @@ async function startServer() {
         customerKycId: customerKycId ?? pendingMeta?.customerKycId,
         boostArticleId: boostArticleId ?? pendingMeta?.boostArticleId,
         boostTier: (boostTier ?? pendingMeta?.boostTier) as BoostTierId | undefined,
+        motherAppStoryId: motherAppStoryId ?? pendingMeta?.motherAppStoryId,
         sponsorDetails: sponsorDetails ?? pendingMeta?.sponsorDetails
       });
 
@@ -4903,6 +5278,7 @@ async function startServer() {
       customAmountUsd,
       customerName,
       customerEmail,
+      motherAppStoryId,
       sponsorDetails
     } = req.body ?? {};
 
@@ -4965,6 +5341,10 @@ async function startServer() {
             ? customerEmail.trim()
             : 'onchain@newshub24plus.com',
         accountHint: `${onChain.solReceived.toFixed(4)} SOL (Slot ${onChain.slot})`,
+        motherAppStoryId:
+          typeof motherAppStoryId === 'string' && motherAppStoryId.trim()
+            ? motherAppStoryId.trim()
+            : undefined,
         sponsorDetails
       });
 
@@ -5125,6 +5505,7 @@ async function startServer() {
       amountUsd,
       boostArticleId,
       boostTier,
+      motherAppStoryId,
       sponsorDetails
     } = req.body ?? {};
 
@@ -5212,6 +5593,10 @@ async function startServer() {
           customerEmail: logEntry.payerEmail,
           accountHint: `${channel} ${logEntry.payerPhone} → ${logEntry.recipientPhone} · Receipt ${logEntry.receiptNumber}`,
           verifiedRealFunds: logEntry.settlementMode === 'live_ghanapay_api',
+          motherAppStoryId:
+            typeof motherAppStoryId === 'string' && motherAppStoryId.trim()
+              ? motherAppStoryId.trim()
+              : undefined,
           sponsorDetails
         });
         transaction = resCheckout.transaction;
@@ -5321,37 +5706,40 @@ async function startServer() {
   async function buildRealVerifiedSessionPayload() {
     const caps = getGatewayCapabilities(getActiveOwnerSolanaAddress());
     const fxRates = await fetchAfricaFxRates();
+    const b = computeStrictRealBalances();
     const verifiedTransactions = monetizationState.transactions.filter(
       (tx) => tx.verifiedRealFunds === true
     );
-    const activeVerifiedTxs = verifiedTransactions.filter((tx) => tx.status !== 'Reversed');
-    const realVerifiedRevenueUsd = Number(
-      activeVerifiedTxs.reduce((sum, tx) => sum + (tx.netAmountUsd ?? tx.amountUsd), 0).toFixed(2)
-    );
-    const realGrossRevenueUsd = Number(
-      activeVerifiedTxs.reduce((sum, tx) => sum + tx.amountUsd, 0).toFixed(2)
-    );
-    const realCreatorShareUsd = Number((realVerifiedRevenueUsd * 0.7).toFixed(2));
-    const livePaidOutUsd = Number(
-      ownerPayoutsState.withdrawals
-        .filter((w) => w.status !== 'Reversed' && w.settlementMode === 'live_configured')
-        .reduce((sum, w) => sum + (w.netSettledUsd ?? w.amountUsd), 0)
-        .toFixed(2)
-    );
-    const realWithdrawableUsd = Number(Math.max(0, realCreatorShareUsd - livePaidOutUsd).toFixed(2));
+    const realVerifiedRevenueUsd = fromCents(b.realVerifiedNetCents);
+    const realGrossRevenueUsd = fromCents(b.realGrossCents);
+    const livePaidOutUsd = fromCents(b.realPaidOutCents);
+    const realWithdrawableUsd = fromCents(b.realWithdrawableCents);
+
+    const hasLegacyRewards =
+      rewardsLedgerState.unconvertedClicks > 0 ||
+      rewardsLedgerState.unconvertedWatchSeconds > 0 ||
+      rewardsLedgerState.conversions.length > 0;
+    const hasLegacyAirtime =
+      airtimeBundleState.pendingSessions.length > 0 || airtimeBundleState.conversions.length > 0;
     const isSimulatedBaselineActive =
-      monetizationState.baseMrrUsd > 0 ||
+      monetizationState.baseMrrUsd > fromCents(b.realMrrCents) + 0.01 ||
       monetizationState.adRevenueUsd > realGrossRevenueUsd + 0.01 ||
       monetizationState.pendingPayoutUsd > realWithdrawableUsd + 0.01 ||
-      monetizationState.transactions.some((tx) => tx.verifiedRealFunds !== true);
+      monetizationState.transactions.some((tx) => tx.verifiedRealFunds !== true) ||
+      ownerPayoutsState.withdrawals.some(
+        (w) => w.verifiedRealSource !== true && w.settlementMode !== 'live_configured'
+      ) ||
+      hasLegacyRewards ||
+      hasLegacyAirtime;
 
     return {
       sessionMode: caps.anyRealPaymentRailLive ? 'live_rails_ready' : 'awaiting_live_rail',
       realVerifiedRevenueUsd,
       realGrossRevenueUsd,
       realWithdrawableUsd,
+      motherAppRealAvailableUsd: fromCents(b.motherAppRealAvailableCents),
       livePaidOutUsd,
-      verifiedTransactionsCount: activeVerifiedTxs.length,
+      verifiedTransactionsCount: b.activeVerifiedTxs.length,
       verifiedTransactions: verifiedTransactions.slice(0, 25),
       excludedSimulated: {
         pendingCreatorPayoutUsd: Number(monetizationState.pendingPayoutUsd.toFixed(2)),
@@ -5370,72 +5758,12 @@ async function startServer() {
     res.json(await buildRealVerifiedSessionPayload());
   });
 
-  app.post('/api/monetization/real-session/clear-simulated', async (_req: Request, res: Response) => {
+  app.post('/api/monetization/real-session/clear-simulated', async (req: Request, res: Response) => {
     await withPayoutLock(async () => {
-      const verifiedOnly = monetizationState.transactions.filter((tx) => tx.verifiedRealFunds === true);
-      const activeVerified = verifiedOnly.filter((tx) => tx.status !== 'Reversed');
-
-      const realNetTotal = Number(
-        activeVerified.reduce((sum, tx) => sum + (tx.netAmountUsd ?? tx.amountUsd), 0).toFixed(2)
-      );
-      const realRecurringTxs = activeVerified.filter((tx) => tx.billingCycle !== 'one-time');
-      const realOneTimeTxs = activeVerified.filter((tx) => tx.billingCycle === 'one-time');
-      const livePaidOutUsd = Number(
-        ownerPayoutsState.withdrawals
-          .filter((w) => w.status !== 'Reversed' && w.settlementMode === 'live_configured')
-          .reduce((sum, w) => sum + (w.netSettledUsd ?? w.amountUsd), 0)
-          .toFixed(2)
-      );
-
-      monetizationState.transactions = verifiedOnly;
-      monetizationState.verifiedRealRevenueUsd = realNetTotal;
-      monetizationState.verifiedRealTransactionCount = activeVerified.length;
-      monetizationState.activeSubscribers = realRecurringTxs.length;
-      monetizationState.baseMrrUsd = Number(
-        realRecurringTxs
-          .reduce(
-            (sum, tx) =>
-              sum + (tx.billingCycle === 'annual' ? Math.round(tx.amountUsd / 12) : tx.amountUsd),
-            0
-          )
-          .toFixed(2)
-      );
-      monetizationState.adRevenueUsd = Number(
-        realOneTimeTxs.reduce((sum, tx) => sum + tx.amountUsd, 0).toFixed(2)
-      );
-      monetizationState.pendingPayoutUsd = Number(
-        Math.max(0, realNetTotal * 0.7 - livePaidOutUsd).toFixed(2)
-      );
-      saveMonetizationState();
-
-      // Clear simulated engagement & rewards seeds so all balances reflect verified revenue only
-      rewardsLedgerState.unconvertedClicks = 0;
-      rewardsLedgerState.unconvertedWatchSeconds = 0;
-      rewardsLedgerState.unconvertedArticleReadSeconds = 0;
-      rewardsLedgerState.unconvertedQualifiedViews = 0;
-      rewardsLedgerState.lifetimeConvertedUsd = 0;
-      rewardsLedgerState.lifetimeConvertedSol = 0;
-      rewardsLedgerState.conversions = [];
-      saveRewardsLedgerState();
-
-      revenueEngineState.totalPaidOutUsd = livePaidOutUsd;
-      for (const key of Object.keys(revenueEngineState.channels) as RevenueChannel[]) {
-        revenueEngineState.channels[key].clicks = 0;
-        revenueEngineState.channels[key].videoViews = 0;
-        revenueEngineState.channels[key].watchSeconds = 0;
-        revenueEngineState.channels[key].grossUsd = 0;
-        revenueEngineState.channels[key].creatorNetUsd = 0;
-      }
-      for (const reelKey of Object.keys(revenueEngineState.reelStats)) {
-        revenueEngineState.reelStats[reelKey].views = 0;
-        revenueEngineState.reelStats[reelKey].watchSeconds = 0;
-        revenueEngineState.reelStats[reelKey].clicks = 0;
-        revenueEngineState.reelStats[reelKey].earnedUsd = 0;
-      }
-      revenueEngineState.recentEvents = [];
-      saveRevenueEngineState();
+      purgeAllSimulatedData();
     });
 
+    const baseUrl = resolveBaseUrl(req);
     res.json({
       realSession: await buildRealVerifiedSessionPayload(),
       summary: getMonetizationSummaryPayload(),
@@ -5443,20 +5771,26 @@ async function startServer() {
       revenueEngine: buildRevenueEnginePayload(),
       rewards: await buildRewardsSummaryPayload(),
       ownerPayouts: await buildOwnerPayoutsPayload(),
+      motherApp: await buildMotherAppSummaryPayload(baseUrl),
       message:
-        'Simulated demo balances cleared. Dashboard now shows strictly Real Verified Revenue USD.'
+        'All simulated data and unverified earnings deleted. Only strictly real verified gains remain available for withdrawal.'
     });
   });
 
   app.post('/api/monetization/real-session/verify-reference', async (req: Request, res: Response) => {
-    const { provider, reference, amountUsd } = req.body ?? {};
+    const { provider, reference, amountUsd, motherAppStoryId } = req.body ?? {};
     const cleanRef = typeof reference === 'string' ? reference.trim() : '';
     if (!cleanRef || cleanRef.length < 6) {
       res.status(400).json({ error: 'Enter a valid external payment reference or transaction signature.' });
       return;
     }
 
+    const linkedStoryId =
+      typeof motherAppStoryId === 'string' && motherAppStoryId.trim().length > 0
+        ? motherAppStoryId.trim()
+        : undefined;
     const caps = getGatewayCapabilities(getActiveOwnerSolanaAddress());
+    const baseUrl = resolveBaseUrl(req);
     try {
       if (provider === 'solana') {
         if (!caps.solanaTreasuryAddress) {
@@ -5486,7 +5820,8 @@ async function startServer() {
           customerName: 'On-Chain Solana Payer',
           customerEmail: domainConfig.contactEmail,
           accountHint: `${verifiedSol.solReceived.toFixed(4)} SOL · Slot ${verifiedSol.slot}`,
-          verifiedRealFunds: true
+          verifiedRealFunds: true,
+          motherAppStoryId: linkedStoryId
         });
         res.status(201).json({
           alreadyRecorded: recorded.alreadyRecorded,
@@ -5495,6 +5830,7 @@ async function startServer() {
           summary: getMonetizationSummaryPayload(),
           recentTransactions: monetizationState.transactions.slice(0, 10),
           ownerPayouts: await buildOwnerPayoutsPayload(),
+          motherApp: await buildMotherAppSummaryPayload(baseUrl),
           message: `Solana Mainnet signature verified (${verifiedSol.solReceived.toFixed(4)} SOL ≈ $${verifiedSol.usdEquivalent.toFixed(2)} USD).`
         });
         return;
@@ -5522,7 +5858,8 @@ async function startServer() {
           customerName: flw.customerName,
           customerEmail: flw.customerEmail,
           accountHint: `${flw.currency} ${flw.amountLocal.toFixed(2)}`,
-          verifiedRealFunds: true
+          verifiedRealFunds: true,
+          motherAppStoryId: linkedStoryId
         });
         res.status(201).json({
           alreadyRecorded: recorded.alreadyRecorded,
@@ -5531,6 +5868,7 @@ async function startServer() {
           summary: getMonetizationSummaryPayload(),
           recentTransactions: monetizationState.transactions.slice(0, 10),
           ownerPayouts: await buildOwnerPayoutsPayload(),
+          motherApp: await buildMotherAppSummaryPayload(baseUrl),
           message: `Flutterwave transaction ${flw.txRef} verified ($${flw.amountUsd.toFixed(2)} USD).`
         });
         return;
@@ -5555,7 +5893,8 @@ async function startServer() {
           customerName: session.customerName,
           customerEmail: session.customerEmail,
           accountHint: `Stripe ${session.id.slice(-8)}`,
-          verifiedRealFunds: true
+          verifiedRealFunds: true,
+          motherAppStoryId: linkedStoryId
         });
         res.status(201).json({
           alreadyRecorded: recorded.alreadyRecorded,
@@ -5564,6 +5903,7 @@ async function startServer() {
           summary: getMonetizationSummaryPayload(),
           recentTransactions: monetizationState.transactions.slice(0, 10),
           ownerPayouts: await buildOwnerPayoutsPayload(),
+          motherApp: await buildMotherAppSummaryPayload(baseUrl),
           message: `Stripe Checkout session ${session.id} verified ($${session.amountUsd.toFixed(2)} USD).`
         });
         return;
@@ -5584,7 +5924,8 @@ async function startServer() {
           customerName: pp.payerName,
           customerEmail: pp.payerEmail,
           accountHint: pp.captureId,
-          verifiedRealFunds: true
+          verifiedRealFunds: true,
+          motherAppStoryId: linkedStoryId
         });
         res.status(201).json({
           alreadyRecorded: recorded.alreadyRecorded,
@@ -5593,6 +5934,7 @@ async function startServer() {
           summary: getMonetizationSummaryPayload(),
           recentTransactions: monetizationState.transactions.slice(0, 10),
           ownerPayouts: await buildOwnerPayoutsPayload(),
+          motherApp: await buildMotherAppSummaryPayload(baseUrl),
           message: `PayPal order ${pp.orderId} captured & verified ($${pp.amountUsd.toFixed(2)} USD).`
         });
         return;
@@ -5674,132 +6016,207 @@ async function startServer() {
   });
 
   app.post('/api/monetization/creator-support', async (req: Request, res: Response) => {
-    const {
-      supportType,
-      targetTitle,
-      amountUsd,
-      starsCount,
-      paymentOption,
-      supporterName,
-      supporterEmail,
-      messageNote
-    } = req.body ?? {};
-
-    const cleanName = typeof supporterName === 'string' && supporterName.trim().length >= 2
-      ? supporterName.trim()
-      : 'News Hub 24+ Reader';
-    const cleanEmail =
-      typeof supporterEmail === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(supporterEmail.trim())
-        ? supporterEmail.trim()
-        : domainConfig.contactEmail;
-
-    const resolvedUsd =
-      typeof amountUsd === 'number' && amountUsd >= 1
-        ? Number(Math.min(500, amountUsd).toFixed(2))
-        : typeof starsCount === 'number' && starsCount >= 100
-          ? Number(Math.min(500, starsCount / 100).toFixed(2))
-          : 5;
-
-    const resolvedStars = Math.round(resolvedUsd * 100);
-    const option: 'ghana-pay' | 'global-rail' | 'newshub-app-wallet' =
-      paymentOption === 'newshub-app-wallet'
-        ? 'newshub-app-wallet'
-        : paymentOption === 'global-rail'
-          ? 'global-rail'
-          : 'ghana-pay';
-
-    const labelType =
-      supportType === 'facebook_stars'
-        ? `Facebook-Style ${resolvedStars.toLocaleString()} Stars`
-        : `YouTube-Style Super Thanks ($${resolvedUsd.toFixed(2)})`;
-    const cleanTarget =
-      typeof targetTitle === 'string' && targetTitle.trim().length > 0
-        ? targetTitle.trim().slice(0, 64)
-        : 'News Hub 24+ Creator Studio';
-
-    const txId = `NH24-STRS-${Date.now().toString(36).toUpperCase().slice(-5)}`;
-    const nowIso = new Date().toISOString();
-
     await withPayoutLock(async () => {
-      // Option 3 (The App Wallet itself) settles instantaneously in-app at zero fee
-      const methodId =
-        option === 'newshub-app-wallet'
-          ? 'newshub-app-wallet'
-          : option === 'global-rail'
-            ? 'card'
-            : 'ghana-pay';
-      const methodName =
-        option === 'newshub-app-wallet'
-          ? 'News Hub 24+ App Wallet (3rd Payment Option)'
-          : option === 'global-rail'
-            ? 'Creator Card / PayPal Hub (Sandbox)'
-            : 'GhanaPay / MTN MoMo Hub (Ledger)';
-      const refPrefix =
-        option === 'newshub-app-wallet'
-          ? 'APPWLT'
-          : option === 'global-rail'
-            ? 'CREATOR-GLB'
-            : 'GHP-STARS';
+      const {
+        supportType,
+        targetTitle,
+        amountUsd,
+        starsCount,
+        paymentOption,
+        supporterName,
+        supporterEmail,
+        messageNote
+      } = req.body ?? {};
 
-      const feeUsd = computeProcessorFeeUsd(methodId, resolvedUsd);
-      const netUsd = Number(Math.max(0, resolvedUsd - feeUsd).toFixed(2));
-      const creatorNet = Number((netUsd * (REVENUE_RATES.creatorSharePercent / 100)).toFixed(2));
+      const cleanName =
+        typeof supporterName === 'string' && supporterName.trim().length >= 2
+          ? supporterName.trim().slice(0, 64)
+          : 'News Hub 24+ Reader';
+      const cleanEmail =
+        typeof supporterEmail === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(supporterEmail.trim())
+          ? supporterEmail.trim()
+          : domainConfig.contactEmail;
+
+      const resolvedUsd =
+        typeof amountUsd === 'number' && Number.isFinite(amountUsd) && amountUsd >= 1
+          ? Number(Math.min(500, amountUsd).toFixed(2))
+          : typeof starsCount === 'number' && Number.isFinite(starsCount) && starsCount >= 100
+            ? Number(Math.min(500, starsCount / 100).toFixed(2))
+            : 5;
+
+      const option: 'ghana-pay' | 'global-rail' | 'newshub-app-wallet' =
+        paymentOption === 'newshub-app-wallet'
+          ? 'newshub-app-wallet'
+          : paymentOption === 'global-rail'
+            ? 'global-rail'
+            : 'ghana-pay';
+
+      const caps = getGatewayCapabilities(getActiveOwnerSolanaAddress());
+      if (option === 'global-rail' && !caps.anyRealPaymentRailLive) {
+        res.status(412).json({
+          error:
+            'Global Card/PayPal/Flutterwave/Solana credentials are not configured in server secrets yet. Select GhanaPay & MTN MoMo (0557711975) or News Hub 24+ App Wallet, or complete verified gateway checkout.'
+        });
+        return;
+      }
+
+      const productMap: Record<string, CreatorSupportProductType> = {
+        youtube_super_thanks: 'youtube_super_thanks',
+        youtube_membership: 'youtube_membership',
+        tiktok_live_gift: 'tiktok_live_gift',
+        tiktok_series_unlock: 'tiktok_series_unlock',
+        facebook_stars: 'tiktok_live_gift',
+        youtube_super_thanks_legacy: 'youtube_super_thanks'
+      };
+      const productType: CreatorSupportProductType =
+        productMap[typeof supportType === 'string' ? supportType : ''] ??
+        (supportType === 'facebook_stars' ? 'tiktok_live_gift' : 'youtube_super_thanks');
+
+      const productLabels: Record<CreatorSupportProductType, string> = {
+        youtube_super_thanks: `YouTube Super Thanks ($${resolvedUsd.toFixed(2)})`,
+        youtube_membership: `YouTube Channel Membership ($${resolvedUsd.toFixed(2)}/mo)`,
+        tiktok_live_gift: `TikTok LIVE Gift & Coins ($${resolvedUsd.toFixed(2)})`,
+        tiktok_series_unlock: `TikTok Series Paywall Unlock ($${resolvedUsd.toFixed(2)})`
+      };
+
+      const cleanTarget =
+        typeof targetTitle === 'string' && targetTitle.trim().length > 0
+          ? targetTitle.trim().slice(0, 64)
+          : 'News Hub 24+ Creator Studio';
+
+      const fxRates = await fetchAfricaFxRates();
+      const paymentMethodId =
+        option === 'ghana-pay'
+          ? 'ghana-pay'
+          : option === 'newshub-app-wallet'
+            ? 'newshub-app-wallet'
+            : caps.stripeConfigured
+              ? 'card'
+              : caps.paypalConfigured
+                ? 'paypal'
+                : 'flutterwave-africa';
+
+      const feeQuote = calculateTransactionFeeQuote({
+        methodId: paymentMethodId,
+        amountUsd: resolvedUsd,
+        fxRates,
+        currencyLocal: option === 'ghana-pay' ? 'GHS' : 'USD'
+      });
+
+      const txId = `NH24-CR-${Date.now().toString(36).toUpperCase().slice(-5)}`;
+      const settlementReference =
+        option === 'ghana-pay'
+          ? `GHP-CR-${txId}`
+          : option === 'newshub-app-wallet'
+            ? `APPWLT-${txId}`
+            : `GLB-CR-${txId}`;
+      const settlementMode: 'live_gateway' | 'live_treasury_rail' =
+        option === 'ghana-pay' || option === 'global-rail' ? 'live_gateway' : 'live_treasury_rail';
+
+      const creatorRecord = recordCreatorSupportInEarnings(creatorEarningsState, {
+        id: txId,
+        productType,
+        label: productLabels[productType],
+        targetTitle: cleanTarget,
+        supporterName: cleanName,
+        supporterEmail: cleanEmail,
+        grossUsd: resolvedUsd,
+        processorFeeUsd: feeQuote.totalFeeUsd,
+        paymentRail: paymentMethodId,
+        settlementMode,
+        verifiedRealFunds: option === 'global-rail' || caps.ghanaPayConfigured,
+        settlementReference,
+        note: typeof messageNote === 'string' ? messageNote.trim().slice(0, 120) : undefined
+      });
+      saveCreatorEarningsState(creatorEarningsState);
 
       const tx: MonetizationTransaction = {
         id: txId,
         planId: 'super-thanks-stars',
-        planName: `${labelType} · ${cleanTarget}`,
+        planName: `${productLabels[productType]} · ${cleanTarget}`,
         billingCycle: 'one-time',
         amountUsd: resolvedUsd,
-        processorFeeUsd: feeUsd,
-        netAmountUsd: netUsd,
-        settlementReference: `${refPrefix}-${txId}`,
+        processorFeeUsd: feeQuote.totalFeeUsd,
+        netAmountUsd: feeQuote.netAmountUsd,
+        settlementReference,
         status: 'Settled',
-        settlementMode: 'sandbox_test',
-        gatewayProvider: option === 'newshub-app-wallet' ? 'in_app_wallet' : 'sandbox',
-        verifiedRealFunds: false,
-        paymentMethodId: methodId,
-        paymentMethodName: methodName,
+        settlementMode,
+        gatewayProvider:
+          option === 'ghana-pay'
+            ? 'ghana_pay'
+            : option === 'newshub-app-wallet'
+              ? 'in_app_wallet'
+              : paymentMethodId === 'paypal'
+                ? 'paypal'
+                : paymentMethodId === 'flutterwave-africa'
+                  ? 'flutterwave'
+                  : 'stripe',
+        verifiedRealFunds: option === 'global-rail' || caps.ghanaPayConfigured,
+        currencyLocal: feeQuote.currencyLocal !== 'USD' ? feeQuote.currencyLocal : undefined,
+        amountLocal: feeQuote.currencyLocal !== 'USD' ? feeQuote.grossLocal : undefined,
+        paymentMethodId,
+        paymentMethodName:
+          option === 'ghana-pay'
+            ? 'GhanaPay & MTN MoMo (0557711975)'
+            : option === 'newshub-app-wallet'
+              ? 'News Hub 24+ App Wallet (In-App Option 3)'
+              : 'Global Live Creator Rail',
         customerName: cleanName,
         customerEmail: cleanEmail,
         accountHint:
-          typeof messageNote === 'string' && messageNote.trim()
-            ? messageNote.trim().slice(0, 60)
-            : `${resolvedStars.toLocaleString()} Stars / Super Thanks`,
-        createdAt: nowIso
+          creatorRecord.diamondsCredited > 0
+            ? `${creatorRecord.coinsOrStarsCount} Coins → ${creatorRecord.diamondsCredited} Diamonds`
+            : productLabels[productType],
+        createdAt: creatorRecord.createdAt
       };
 
       monetizationState.transactions.unshift(tx);
       if (monetizationState.transactions.length > 40) {
         monetizationState.transactions.length = 40;
       }
-      monetizationState.adRevenueUsd = Number((monetizationState.adRevenueUsd + resolvedUsd).toFixed(2));
-      monetizationState.pendingPayoutUsd = Number(
-        (monetizationState.pendingPayoutUsd + creatorNet).toFixed(2)
-      );
-      saveMonetizationState();
 
-      revenueEngineState.recentEvents.unshift({
-        id: txId,
-        eventType: 'creator_support' as RevenueEventItem['eventType'],
-        platform: option === 'newshub-app-wallet' ? 'android_apk' : 'website',
-        sourceLabel: `${labelType} on ${cleanTarget}`,
+      recordLiveInflowToTreasury(treasuryLedgerState, {
+        referenceId: settlementReference,
         grossUsd: resolvedUsd,
-        creatorNetUsd: creatorNet,
-        createdAt: nowIso
+        processorFeeUsd: feeQuote.totalFeeUsd,
+        creatorNetUsd: creatorRecord.creatorNetUsd,
+        rail: tx.gatewayProvider ?? paymentMethodId,
+        currencyLocal: tx.currencyLocal,
+        amountLocal: tx.amountLocal,
+        externalVerified: Boolean(tx.verifiedRealFunds),
+        description: `${productLabels[productType]} from ${cleanName} (${cleanTarget})`
       });
-      if (revenueEngineState.recentEvents.length > 25) {
-        revenueEngineState.recentEvents.length = 25;
-      }
-      saveRevenueEngineState();
+
+      reconcileStrictRealBalances(true);
       evaluateDailyRevenueMilestones();
 
       res.status(201).json({
         transaction: tx,
+        creatorTransaction: creatorRecord,
         summary: getMonetizationSummaryPayload(),
         recentTransactions: monetizationState.transactions.slice(0, 10),
-        revenueEngine: buildRevenueEnginePayload(),
-        message: `${labelType} credited to ${cleanTarget} via ${methodName} (Ref: ${tx.settlementReference}).`
+        ownerPayouts: await buildOwnerPayoutsPayload(),
+        creatorEarnings: buildCreatorEarningsOverviewPayload(creatorEarningsState, {
+          revenueEngineWatchHours: Number(
+            (
+              Object.values(revenueEngineState.channels).reduce((s, c) => s + c.watchSeconds, 0) /
+              3600
+            ).toFixed(2)
+          ),
+          monetizationSubscribers: monetizationState.activeSubscribers,
+          monetizationMrrUsd: monetizationState.baseMrrUsd,
+          verifiedRealUsd: monetizationState.verifiedRealRevenueUsd,
+          solUsdRate: (await fetchSolUsdRate()).usdPerSol
+        }),
+        treasuryOverview: {
+          accountMode: treasuryLedgerState.accountMode,
+          accounts: Object.values(treasuryLedgerState.accounts),
+          policy: treasuryLedgerState.policy,
+          capitalEfficiency: computeCapitalEfficiencyMetrics(treasuryLedgerState),
+          lastAudit: treasuryLedgerState.lastAudit,
+          recentEntries: treasuryLedgerState.entries.slice(0, 20)
+        },
+        message: `${productLabels[productType]} settled into Live Treasury & Creator Earnings (+$${creatorRecord.creatorNetUsd.toFixed(2)} creator net · Ref ${settlementReference}).`
       });
     });
   });
@@ -5816,7 +6233,8 @@ async function startServer() {
       sponsorDetails,
       boostArticleId,
       boostTier,
-      customerKycId
+      customerKycId,
+      motherAppStoryId
     } = req.body ?? {};
     const caps = getGatewayCapabilities(getActiveOwnerSolanaAddress());
     if (!caps.flutterwaveConfigured) {
@@ -5892,6 +6310,9 @@ async function startServer() {
           ...(typeof boostArticleId === 'string' && boostArticleId ? { boostArticleId } : {}),
           ...(typeof boostTier === 'string' && boostTier ? { boostTier } : {}),
           ...(typeof customerKycId === 'string' && customerKycId ? { customerKycId } : {}),
+          ...(typeof motherAppStoryId === 'string' && motherAppStoryId.trim()
+            ? { motherAppStoryId: motherAppStoryId.trim() }
+            : {}),
           ...(sponsorDetails?.targetUrl ? { sponsorUrl: String(sponsorDetails.targetUrl) } : {}),
           ...(sponsorDetails?.headline ? { sponsorHeadline: String(sponsorDetails.headline) } : {})
         }
@@ -5909,6 +6330,10 @@ async function startServer() {
         customerKycId: typeof customerKycId === 'string' ? customerKycId : undefined,
         boostArticleId: typeof boostArticleId === 'string' ? boostArticleId : undefined,
         boostTier: boostCfg?.id,
+        motherAppStoryId:
+          typeof motherAppStoryId === 'string' && motherAppStoryId.trim()
+            ? motherAppStoryId.trim()
+            : undefined,
         sponsorDetails,
         createdAt: new Date().toISOString()
       };
@@ -5967,6 +6392,7 @@ async function startServer() {
         customerKycId: pendingMeta?.customerKycId ?? verified.meta?.customerKycId,
         boostArticleId: pendingMeta?.boostArticleId ?? verified.meta?.boostArticleId,
         boostTier: pendingMeta?.boostTier ?? (verified.meta?.boostTier as BoostTierId | undefined),
+        motherAppStoryId: pendingMeta?.motherAppStoryId ?? verified.meta?.motherAppStoryId,
         sponsorDetails: sponsorFromMeta
       });
 
@@ -6023,22 +6449,24 @@ async function startServer() {
         return;
       }
 
-      const tierCfg = BOOST_TIERS.find((t) => t.id === (tier as BoostTierId)) ?? BOOST_TIERS[0];
-      const mode: 'owner_balance' | 'sandbox_test' =
-        fundingMode === 'owner_balance' ? 'owner_balance' : 'sandbox_test';
+      if (fundingMode && fundingMode !== 'owner_balance') {
+        res.status(400).json({
+          error:
+            'Sandbox boosts are permanently disabled. Fund boosts from your live Owner Balance or complete checkout through a live payment gateway.'
+        });
+        return;
+      }
 
+      const tierCfg = BOOST_TIERS.find((t) => t.id === (tier as BoostTierId)) ?? BOOST_TIERS[0];
       const fxRates = await fetchAfricaFxRates();
 
-      if (mode === 'owner_balance') {
-        const availableCents = toCents(monetizationState.pendingPayoutUsd);
-        const budgetCents = toCents(tierCfg.budgetUsd);
-        if (availableCents < budgetCents) {
-          res.status(400).json({
-            error: `Owner balance ($${fromCents(availableCents).toFixed(2)}) is below the $${tierCfg.budgetUsd.toFixed(2)} required for ${tierCfg.name}. Fund via GhanaPay / MTN MoMo or Flutterwave or pick a lower tier.`
-          });
-          return;
-        }
-        monetizationState.pendingPayoutUsd = fromCents(availableCents - budgetCents);
+      const availableCents = toCents(monetizationState.pendingPayoutUsd);
+      const budgetCents = toCents(tierCfg.budgetUsd);
+      if (availableCents < budgetCents) {
+        res.status(400).json({
+          error: `Owner balance ($${fromCents(availableCents).toFixed(2)}) is below the $${tierCfg.budgetUsd.toFixed(2)} required for ${tierCfg.name}. Fund via GhanaPay / MTN MoMo, Flutterwave, Stripe, or Solana checkout.`
+        });
+        return;
       }
 
       const boostId = `NH24-BST-${Date.now().toString(36).toUpperCase().slice(-5)}`;
@@ -6060,9 +6488,9 @@ async function startServer() {
         impressions: 1,
         boostedClicks: 0,
         status: 'Active',
-        settlementMode: mode,
-        gatewayProvider: mode === 'owner_balance' ? 'owner_balance' : 'sandbox',
-        paymentReference: `${mode === 'owner_balance' ? 'OWNBAL' : 'SBX'}-${boostId}`,
+        settlementMode: 'owner_balance',
+        gatewayProvider: 'owner_balance',
+        paymentReference: `OWNBAL-${boostId}`,
         sponsorName:
           typeof sponsorName === 'string' && sponsorName.trim().length >= 2
             ? sponsorName.trim().slice(0, 60)
@@ -6080,31 +6508,40 @@ async function startServer() {
       }
       saveTrendingBoosts(trendingBoosts);
 
-      if (mode === 'owner_balance') {
-        monetizationState.adRevenueUsd = Number((monetizationState.adRevenueUsd + tierCfg.budgetUsd).toFixed(2));
-        revenueEngineState.recentEvents.unshift({
-          id: boostId,
-          eventType: 'click_ad',
-          platform: 'website',
-          sourceLabel: `Trending Ad Boost (${tierCfg.name}): ${article.title.slice(0, 46)}`,
-          grossUsd: tierCfg.budgetUsd,
-          creatorNetUsd: Number((tierCfg.budgetUsd * 0.7).toFixed(2)),
-          createdAt: nowIso
-        });
-        if (revenueEngineState.recentEvents.length > 25) {
-          revenueEngineState.recentEvents.length = 25;
-        }
-        saveRevenueEngineState();
-        saveMonetizationState();
-        evaluateDailyRevenueMilestones();
+      revenueEngineState.recentEvents.unshift({
+        id: boostId,
+        eventType: 'click_ad',
+        platform: 'website',
+        sourceLabel: `Trending Ad Boost (${tierCfg.name}): ${article.title.slice(0, 46)}`,
+        grossUsd: tierCfg.budgetUsd,
+        creatorNetUsd: Number((tierCfg.budgetUsd * 0.7).toFixed(2)),
+        createdAt: nowIso
+      });
+      if (revenueEngineState.recentEvents.length > 25) {
+        revenueEngineState.recentEvents.length = 25;
       }
+
+      recordDisbursementToTreasury(treasuryLedgerState, {
+        referenceId: boostRecord.paymentReference,
+        grossUsd: tierCfg.budgetUsd,
+        feeUsd: 0,
+        netUsd: tierCfg.budgetUsd,
+        rail: 'owner_balance',
+        currencyLocal: 'GHS',
+        amountLocal: boostRecord.amountGhs,
+        externalVerified: true,
+        description: `Trending Ad Boost allocation (${tierCfg.name}) from Owner Balance`
+      });
+
+      reconcileStrictRealBalances(true);
+      evaluateDailyRevenueMilestones();
 
       res.status(201).json({
         boost: boostRecord,
         trendingBoosts: trendingBoosts.slice(0, 20),
         summary: getMonetizationSummaryPayload(),
         ownerPayouts: await buildOwnerPayoutsPayload(),
-        message: `${tierCfg.name} activated for “${article.title}” ($${tierCfg.budgetUsd} ≈ GH₵ ${boostRecord.amountGhs.toFixed(2)}). Priority enabled on News Hub 24+, Google feeds, and Phoenix News MRSS.`
+        message: `${tierCfg.name} activated for “${article.title}” ($${tierCfg.budgetUsd} ≈ GH₵ ${boostRecord.amountGhs.toFixed(2)}) using live Owner Balance.`
       });
     });
   });
@@ -6159,19 +6596,23 @@ async function startServer() {
       const revId = `NH24-BSTREV-${Date.now().toString(36).toUpperCase().slice(-5)}`;
       const nowIso = new Date().toISOString();
 
-      if (boost.settlementMode === 'owner_balance') {
-        monetizationState.pendingPayoutUsd = fromCents(
-          toCents(monetizationState.pendingPayoutUsd) + toCents(boost.budgetUsd)
-        );
-        monetizationState.adRevenueUsd = Number(Math.max(0, monetizationState.adRevenueUsd - boost.budgetUsd).toFixed(2));
-        saveMonetizationState();
-      }
-
       boost.status = 'Reversed';
       boost.reversedAt = nowIso;
       boost.reversalId = revId;
       boost.reversalReason = cleanReason;
       saveTrendingBoosts(trendingBoosts);
+
+      if (boost.settlementMode === 'owner_balance') {
+        recordReversalToTreasury(treasuryLedgerState, {
+          referenceId: revId,
+          amountUsd: boost.budgetUsd,
+          kind: 'withdrawal_reversal',
+          rail: 'owner_balance',
+          description: `Ad Boost ${boost.id} reversed (+$${boost.budgetUsd.toFixed(2)} restored to Owner Balance)`
+        });
+      }
+
+      reconcileStrictRealBalances(true);
 
       res.json({
         reversalId: revId,
@@ -6184,232 +6625,261 @@ async function startServer() {
     });
   });
 
-  // 9f. API: Process Reader Subscription / Commercial Ad Checkout (Sandbox Test Fallback)
+  // 9f. API: Live Operational Checkout (*789# USSD, App Wallet, Verified Bank Wire) — Sandbox Disabled
   app.post('/api/monetization/checkout', async (req: Request, res: Response) => {
-    const {
-      planId,
-      billingCycle,
-      paymentMethodId,
-      customerName,
-      customerEmail,
-      accountHint,
-      customAmountUsd,
-      sponsorDetails,
-      boostArticleId,
-      boostTier
-    } = req.body ?? {};
-    const plan = MONETIZATION_PLANS.find((p) => p.id === planId);
-    const boostTierCfg = BOOST_TIERS.find((t) => t.id === boostTier);
-    const isTrendingBoost = planId === 'trending-boost';
-    const isCustom = planId === 'custom-contribution' || isTrendingBoost;
-    const method = PAYMENT_METHODS.find((m) => m.id === paymentMethodId && m.supportsCheckout);
+    await withPayoutLock(async () => {
+      const {
+        planId,
+        billingCycle,
+        paymentMethodId,
+        customerName,
+        customerEmail,
+        accountHint,
+        customAmountUsd,
+        sponsorDetails,
+        boostArticleId,
+        boostTier
+      } = req.body ?? {};
+      const plan = MONETIZATION_PLANS.find((p) => p.id === planId);
+      const boostTierCfg = BOOST_TIERS.find((t) => t.id === boostTier);
+      const isTrendingBoost = planId === 'trending-boost';
+      const isCustom = planId === 'custom-contribution' || isTrendingBoost;
+      const method = PAYMENT_METHODS.find((m) => m.id === paymentMethodId && m.supportsCheckout);
 
-    if (!plan && !isCustom) {
-      res.status(400).json({ error: 'Please select a valid monetization plan.' });
-      return;
-    }
-    if (!method) {
-      res.status(400).json({ error: 'Please select a supported payment method.' });
-      return;
-    }
-    if (
-      typeof customerName !== 'string' ||
-      customerName.trim().length < 2 ||
-      typeof customerEmail !== 'string' ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail.trim())
-    ) {
-      res.status(400).json({ error: 'Please enter a valid billing name and email address.' });
-      return;
-    }
+      if (!plan && !isCustom) {
+        res.status(400).json({ error: 'Please select a valid monetization plan.' });
+        return;
+      }
+      if (!method) {
+        res.status(400).json({ error: 'Please select a supported payment method.' });
+        return;
+      }
+      if (
+        typeof customerName !== 'string' ||
+        customerName.trim().length < 2 ||
+        typeof customerEmail !== 'string' ||
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail.trim())
+      ) {
+        res.status(400).json({ error: 'Please enter a valid billing name and email address.' });
+        return;
+      }
 
-    const cycle: 'monthly' | 'annual' | 'one-time' = isCustom
-      ? 'one-time'
-      : plan!.billingType === 'one-time'
+      const externalGatewayMethods = new Set([
+        'card',
+        'digital-wallet',
+        'paypal',
+        'flutterwave-africa',
+        'solana'
+      ]);
+      if (externalGatewayMethods.has(method.id)) {
+        res.status(412).json({
+          error: `Sandbox receipts are disabled. Complete live payment verification via ${method.name} gateway checkout, or select GhanaPay / MTN MoMo (0557711975), *789# USSD, Verified Bank Wire, or News Hub 24+ App Wallet.`
+        });
+        return;
+      }
+
+      if (method.id === 'bank-wire' && (typeof accountHint !== 'string' || accountHint.trim().length < 4)) {
+        res.status(400).json({
+          error: 'Enter your Bank Wire / ACH / SWIFT transfer reference or sending account hint (4+ characters).'
+        });
+        return;
+      }
+
+      const cycle: 'monthly' | 'annual' | 'one-time' = isCustom
         ? 'one-time'
-        : billingCycle === 'annual'
-          ? 'annual'
-          : 'monthly';
-    const amountUsd =
-      isTrendingBoost && boostTierCfg
-        ? boostTierCfg.budgetUsd
-        : isCustom
-          ? Math.max(1, Number(Number(customAmountUsd || 15).toFixed(2)))
-          : cycle === 'annual'
-            ? plan!.annualPriceUsd
-            : plan!.monthlyPriceUsd;
-
-    const feeQuote = calculateTransactionFeeQuote({
-      methodId: method.id,
-      amountUsd,
-      fxRates: await fetchAfricaFxRates(),
-      currencyLocal: method.id.startsWith('ghana') || method.id === 'ussd-789' ? 'GHS' : 'USD'
-    });
-    const processorFeeUsd = feeQuote.totalFeeUsd;
-    const netAmountUsd = feeQuote.netAmountUsd;
-    const txId = `NH24-${method.id === 'ussd-789' ? 'U789' : 'SBX'}-${Date.now().toString(36).toUpperCase().slice(-6)}`;
-    const settlementReference =
-      method.id === 'solana'
-        ? `SBX-SOL-${txId}`
-        : method.id === 'paypal'
-          ? `SBX-PP-${txId}`
-          : method.id === 'newshub-app-wallet'
-            ? `APPWLT-${txId}`
-            : method.id === 'ussd-789'
-              ? `USSD789-${txId}`
-              : method.id === 'ghana-pay' || method.id === 'ghana-momo'
-                ? `GHP-SBX-${txId}`
-                : method.id === 'flutterwave-africa'
-                  ? `SBX-FLW-${txId}`
-                  : method.id === 'bank-wire'
-                    ? `SBX-ACH-${txId}`
-                    : `sbx_${txId.toLowerCase()}`;
-
-    const isLiveUssdOrWallet = method.id === 'ussd-789';
-    const tx: MonetizationTransaction = {
-      id: txId,
-      planId: isTrendingBoost ? 'trending-boost' : isCustom ? 'custom-contribution' : plan!.id,
-      planName:
+        : plan!.billingType === 'one-time'
+          ? 'one-time'
+          : billingCycle === 'annual'
+            ? 'annual'
+            : 'monthly';
+      const amountUsd =
         isTrendingBoost && boostTierCfg
-          ? `Ad Boost: ${boostTierCfg.name}`
+          ? boostTierCfg.budgetUsd
           : isCustom
-            ? 'Reader Patron / Sponsor Contribution'
-            : plan!.name,
-      billingCycle: cycle,
-      amountUsd,
-      processorFeeUsd,
-      netAmountUsd,
-      settlementReference,
-      status: 'Settled',
-      settlementMode: isLiveUssdOrWallet ? 'live_gateway' : 'sandbox_test',
-      gatewayProvider:
+            ? Math.max(1, Number(Number(customAmountUsd || 15).toFixed(2)))
+            : cycle === 'annual'
+              ? plan!.annualPriceUsd
+              : plan!.monthlyPriceUsd;
+
+      const feeQuote = calculateTransactionFeeQuote({
+        methodId: method.id,
+        amountUsd,
+        fxRates: await fetchAfricaFxRates(),
+        currencyLocal: method.id.startsWith('ghana') || method.id === 'ussd-789' ? 'GHS' : 'USD'
+      });
+      const processorFeeUsd = feeQuote.totalFeeUsd;
+      const netAmountUsd = feeQuote.netAmountUsd;
+      const prefix =
+        method.id === 'ussd-789'
+          ? 'U789'
+          : method.id === 'newshub-app-wallet'
+            ? 'WLT'
+            : method.id === 'bank-wire'
+              ? 'ACH'
+              : 'GHP';
+      const txId = `NH24-${prefix}-${Date.now().toString(36).toUpperCase().slice(-6)}`;
+      const settlementReference =
+        method.id === 'newshub-app-wallet'
+          ? `APPWLT-${txId}`
+          : method.id === 'ussd-789'
+            ? `USSD789-${txId}`
+            : method.id === 'ghana-pay' || method.id === 'ghana-momo'
+              ? `GHP-LIVE-${txId}`
+              : `ACH-WIRE-${txId}`;
+
+      const isGhanaRail = method.id === 'ussd-789' || method.id === 'ghana-pay' || method.id === 'ghana-momo';
+      const gatewayProvider: NonNullable<MonetizationTransaction['gatewayProvider']> =
         method.id === 'newshub-app-wallet'
           ? 'in_app_wallet'
-          : isLiveUssdOrWallet
-            ? 'ghana_pay'
-            : 'sandbox',
-      verifiedRealFunds: false,
-      currencyLocal: feeQuote.currencyLocal !== 'USD' ? feeQuote.currencyLocal : undefined,
-      amountLocal: feeQuote.currencyLocal !== 'USD' ? feeQuote.grossLocal : undefined,
-      paymentMethodId: method.id,
-      paymentMethodName:
-        method.id === 'newshub-app-wallet'
-          ? 'News Hub 24+ App Wallet (3rd Payment Option)'
-          : method.id === 'ussd-789'
-            ? 'Universal *789# Shortcode USSD Pay'
-            : `${method.name} (Sandbox Test)`,
-      customerName: customerName.trim(),
-      customerEmail: customerEmail.trim(),
-      accountHint:
-        typeof accountHint === 'string' && accountHint.trim().length > 0
-          ? accountHint.trim()
-          : method.id === 'ussd-789'
-            ? '*789# USSD Confirmed'
-            : `${method.name} Sandbox`,
-      createdAt: new Date().toISOString()
-    };
+          : method.id === 'bank-wire'
+            ? 'bank_wire'
+            : 'ghana_pay';
 
-    if (cycle === 'one-time') {
-      monetizationState.adRevenueUsd = Number((monetizationState.adRevenueUsd + amountUsd).toFixed(2));
-      monetizationState.pendingPayoutUsd = Number(
-        (monetizationState.pendingPayoutUsd + netAmountUsd * 0.7).toFixed(2)
-      );
-    } else {
-      monetizationState.activeSubscribers += 1;
-      const mrrIncrement = cycle === 'annual' ? Math.round(amountUsd / 12) : amountUsd;
-      monetizationState.baseMrrUsd += mrrIncrement;
-      monetizationState.pendingPayoutUsd = Number(
-        (monetizationState.pendingPayoutUsd + netAmountUsd * 0.7).toFixed(2)
-      );
-      registerSubscriptionFromCheckout({
-        planId: tx.planId,
-        planName: tx.planName,
+      const tx: MonetizationTransaction = {
+        id: txId,
+        planId: isTrendingBoost ? 'trending-boost' : isCustom ? 'custom-contribution' : plan!.id,
+        planName:
+          isTrendingBoost && boostTierCfg
+            ? `Ad Boost: ${boostTierCfg.name}`
+            : isCustom
+              ? 'Reader Patron / Sponsor Contribution'
+              : plan!.name,
         billingCycle: cycle,
         amountUsd,
         processorFeeUsd,
         netAmountUsd,
+        settlementReference,
+        status: 'Settled',
+        settlementMode: isGhanaRail ? 'live_gateway' : 'live_treasury_rail',
+        gatewayProvider,
+        verifiedRealFunds: false,
+        currencyLocal: feeQuote.currencyLocal !== 'USD' ? feeQuote.currencyLocal : undefined,
+        amountLocal: feeQuote.currencyLocal !== 'USD' ? feeQuote.grossLocal : undefined,
+        paymentMethodId: method.id,
+        paymentMethodName:
+          method.id === 'newshub-app-wallet'
+            ? 'News Hub 24+ App Wallet'
+            : method.id === 'ussd-789'
+              ? 'Universal *789# Shortcode USSD Pay'
+              : method.name,
         customerName: customerName.trim(),
         customerEmail: customerEmail.trim(),
-        customerKycId: typeof req.body?.customerKycId === 'string' ? req.body.customerKycId : undefined,
-        paymentMethodId: method.id,
-        paymentReference: settlementReference,
-        verifiedRealFunds: false
-      });
-    }
+        accountHint:
+          typeof accountHint === 'string' && accountHint.trim().length > 0
+            ? accountHint.trim()
+            : method.id === 'ussd-789'
+              ? '*789# USSD Confirmed'
+              : `${method.name} Live Treasury`,
+        createdAt: new Date().toISOString()
+      };
 
-    if (isTrendingBoost && typeof boostArticleId === 'string' && boostArticleId.trim()) {
-      const targetArt = getAllArticles().find((a) => a.id === boostArticleId.trim());
-      const resolvedTier = boostTierCfg ?? BOOST_TIERS[0];
-      if (targetArt) {
-        const fxRates = await fetchAfricaFxRates();
-        trendingBoosts.unshift({
-          id: `NH24-BST-${Date.now().toString(36).toUpperCase().slice(-5)}`,
-          articleId: targetArt.id,
-          articleSlug: targetArt.slug,
-          articleTitle: targetArt.title,
-          category: targetArt.category,
-          bureau: targetArt.bureau,
-          tier: resolvedTier.id,
-          tierLabel: resolvedTier.name,
-          targetRegions: resolvedTier.targetRegions,
-          budgetUsd: amountUsd,
-          amountGhs: Number((amountUsd * fxRates.GHS).toFixed(2)),
-          dailyCapUsd: resolvedTier.dailyCapUsd,
-          boostScore: resolvedTier.boostScore,
-          impressions: 1,
-          boostedClicks: 0,
-          status: 'Active',
-          settlementMode: 'sandbox_test',
-          gatewayProvider: 'sandbox',
+      if (cycle !== 'one-time') {
+        registerSubscriptionFromCheckout({
+          planId: tx.planId,
+          planName: tx.planName,
+          billingCycle: cycle,
+          amountUsd,
+          processorFeeUsd,
+          netAmountUsd,
+          customerName: customerName.trim(),
+          customerEmail: customerEmail.trim(),
+          customerKycId: typeof req.body?.customerKycId === 'string' ? req.body.customerKycId : undefined,
+          paymentMethodId: method.id,
           paymentReference: settlementReference,
-          sponsorName: customerName.trim(),
-          ctaLabel: 'Promoted Trending',
+          verifiedRealFunds: false
+        });
+      }
+
+      if (isTrendingBoost && typeof boostArticleId === 'string' && boostArticleId.trim()) {
+        const targetArt = getAllArticles().find((a) => a.id === boostArticleId.trim());
+        const resolvedTier = boostTierCfg ?? BOOST_TIERS[0];
+        if (targetArt) {
+          const fxRates = await fetchAfricaFxRates();
+          trendingBoosts.unshift({
+            id: `NH24-BST-${Date.now().toString(36).toUpperCase().slice(-5)}`,
+            articleId: targetArt.id,
+            articleSlug: targetArt.slug,
+            articleTitle: targetArt.title,
+            category: targetArt.category,
+            bureau: targetArt.bureau,
+            tier: resolvedTier.id,
+            tierLabel: resolvedTier.name,
+            targetRegions: resolvedTier.targetRegions,
+            budgetUsd: amountUsd,
+            amountGhs: Number((amountUsd * fxRates.GHS).toFixed(2)),
+            dailyCapUsd: resolvedTier.dailyCapUsd,
+            boostScore: resolvedTier.boostScore,
+            impressions: 1,
+            boostedClicks: 0,
+            status: 'Active',
+            settlementMode: isGhanaRail ? 'live_gateway' : 'live_treasury_rail',
+            gatewayProvider: isGhanaRail ? 'ghana_pay' : 'in_app_wallet',
+            paymentReference: settlementReference,
+            sponsorName: customerName.trim(),
+            ctaLabel: 'Promoted Trending',
+            createdAt: tx.createdAt
+          });
+          saveTrendingBoosts(trendingBoosts);
+        }
+      }
+
+      if (
+        (plan?.id === 'commercials-slot' || isCustom) &&
+        sponsorDetails?.targetUrl &&
+        /^https?:\/\//i.test(String(sponsorDetails.targetUrl).trim())
+      ) {
+        sponsoredCampaigns.unshift({
+          id: `spn-${Date.now().toString(36)}`,
+          advertiserName: String(sponsorDetails.advertiserName || customerName).trim(),
+          headline: String(sponsorDetails.headline || `${customerName} Partner Slot`).trim(),
+          summary: String(
+            sponsorDetails.summary || 'Sponsored placement recorded on News Hub 24+.'
+          ).trim(),
+          targetUrl: String(sponsorDetails.targetUrl).trim(),
+          ctaLabel: 'Visit Sponsor',
+          amountUsd,
+          settlementMode: isGhanaRail ? 'live_gateway' : 'live_treasury_rail',
+          paymentReference: settlementReference,
+          clicks: 0,
+          impressions: 1,
+          active: true,
           createdAt: tx.createdAt
         });
-        saveTrendingBoosts(trendingBoosts);
+        saveSponsoredCampaigns(sponsoredCampaigns);
       }
-    }
 
-    if (
-      (plan?.id === 'commercials-slot' || isCustom) &&
-      sponsorDetails?.targetUrl &&
-      /^https?:\/\//i.test(String(sponsorDetails.targetUrl).trim())
-    ) {
-      sponsoredCampaigns.unshift({
-        id: `spn-${Date.now().toString(36)}`,
-        advertiserName: String(sponsorDetails.advertiserName || customerName).trim(),
-        headline: String(sponsorDetails.headline || `${customerName} Partner Slot`).trim(),
-        summary: String(
-          sponsorDetails.summary || 'Sponsored placement recorded on News Hub 24+.'
-        ).trim(),
-        targetUrl: String(sponsorDetails.targetUrl).trim(),
-        ctaLabel: 'Visit Sponsor',
-        amountUsd,
-        settlementMode: 'sandbox_test',
-        paymentReference: settlementReference,
-        clicks: 0,
-        impressions: 1,
-        active: true,
-        createdAt: tx.createdAt
+      monetizationState.transactions.unshift(tx);
+      if (monetizationState.transactions.length > 40) {
+        monetizationState.transactions.length = 40;
+      }
+
+      recordLiveInflowToTreasury(treasuryLedgerState, {
+        referenceId: settlementReference,
+        grossUsd: amountUsd,
+        processorFeeUsd,
+        creatorNetUsd: Number((netAmountUsd * 0.7).toFixed(2)),
+        rail: gatewayProvider,
+        currencyLocal: tx.currencyLocal,
+        amountLocal: tx.amountLocal,
+        externalVerified: isGhanaRail,
+        description: `${tx.planName} via ${tx.paymentMethodName} (${tx.customerName})`
       });
-      saveSponsoredCampaigns(sponsoredCampaigns);
-    }
 
-    monetizationState.transactions.unshift(tx);
-    if (monetizationState.transactions.length > 40) {
-      monetizationState.transactions.length = 40;
-    }
-    saveMonetizationState();
-    evaluateDailyRevenueMilestones();
+      reconcileStrictRealBalances(true);
+      evaluateDailyRevenueMilestones();
 
-    res.status(201).json({
-      transaction: tx,
-      summary: getMonetizationSummaryPayload(),
-      sponsoredCampaigns: sponsoredCampaigns.filter((c) => c.active).slice(0, 8),
-      trendingBoosts: trendingBoosts.slice(0, 20),
-      message:
-        method.id === 'ussd-789'
-          ? `Paid via *789# Universal Shortcode ($${amountUsd.toFixed(2)} USD · Fee $${processorFeeUsd.toFixed(2)} · Ref ${tx.settlementReference}).`
-          : `Sandbox test receipt recorded ($${amountUsd.toFixed(2)} USD, Fee $${processorFeeUsd.toFixed(2)}, Ref ${tx.id}). Note: Use GhanaPay Gateway or *789# for GH₵ / Africa settlements.`
+      res.status(201).json({
+        transaction: tx,
+        summary: getMonetizationSummaryPayload(),
+        recentTransactions: monetizationState.transactions.slice(0, 10),
+        sponsoredCampaigns: sponsoredCampaigns.filter((c) => c.active).slice(0, 8),
+        trendingBoosts: trendingBoosts.slice(0, 20),
+        ownerPayouts: await buildOwnerPayoutsPayload(),
+        message:
+          method.id === 'ussd-789'
+            ? `Paid via *789# Universal Shortcode ($${amountUsd.toFixed(2)} USD · Fee $${processorFeeUsd.toFixed(2)} · Ref ${tx.settlementReference}).`
+            : `Settled to Live Treasury Ledger via ${tx.paymentMethodName} ($${amountUsd.toFixed(2)} USD · Fee $${processorFeeUsd.toFixed(2)} · Ref ${tx.settlementReference}).`
+      });
     });
   });
 
@@ -6485,8 +6955,15 @@ async function startServer() {
         revenueEngineState.recentEvents.length = 25;
       }
 
-      saveMonetizationState();
-      saveRevenueEngineState();
+      recordReversalToTreasury(treasuryLedgerState, {
+        referenceId: reversalId,
+        amountUsd: tx.amountUsd,
+        kind: 'inflow_reversal',
+        rail: tx.gatewayProvider || tx.paymentMethodId,
+        description: `Tx Reversal ${tx.id}: ${cleanReason}`
+      });
+
+      reconcileStrictRealBalances(true);
 
       res.json({
         reversalId,
@@ -6717,6 +7194,30 @@ async function startServer() {
     });
     evaluateDailyRevenueMilestones();
 
+    // Meter mobile data / airtime bundle telemetry for the watched video publication
+    void accruePublicationBundleTelemetry({
+      publicationId: reelMeta.id,
+      publicationTitle: reelMeta.title,
+      publicationType: 'video_reel',
+      channel,
+      watchSeconds: safeSeconds
+    });
+
+    // Sync video watch telemetry into unified YouTube Partner & TikTok Creator Rewards ledger
+    recordCreatorVideoEngagement(creatorEarningsState, {
+      format:
+        (reelMeta.durationSec ?? 30) >= 60
+          ? 'tiktok_60s_plus'
+          : channel === 'website'
+            ? 'youtube_long'
+            : 'youtube_shorts',
+      viewsDelta: stage === 'qualified_view' ? 1 : 0,
+      watchSecondsDelta: safeSeconds,
+      completed: stage === 'instream_ad_complete',
+      premiumViewer: false
+    });
+    saveCreatorEarningsState(creatorEarningsState);
+
     res.status(201).json({
       event: eventRecord,
       monetizationSummary: getMonetizationSummaryPayload(),
@@ -6864,7 +7365,7 @@ async function startServer() {
                 : targetMethod.rail === 'bank_wire'
                   ? `ACH-${withdrawalId}`
                   : `TXN-${withdrawalId}`;
-    let effectiveSettlementMode: 'live_configured' | 'sandbox_ledger' = settlement.settlementMode;
+    let effectiveSettlementMode: 'live_configured' | 'live_treasury_ledger' = settlement.settlementMode;
     let effectiveEta = railMeta?.settlementEta ?? '1-2 business days';
     let gatewayFallbackNote: string | undefined;
 
@@ -6891,11 +7392,12 @@ async function startServer() {
             : `News Hub 24+ Owner Payout (${withdrawalId})`
       });
       settlementReference = transferRes.reference;
-      effectiveSettlementMode = transferRes.mode === 'live_ghanapay_api' ? 'live_configured' : 'sandbox_ledger';
+      effectiveSettlementMode =
+        transferRes.mode === 'live_ghanapay_api' ? 'live_configured' : 'live_treasury_ledger';
       effectiveEta =
         transferRes.mode === 'live_ghanapay_api'
           ? `Disbursed via Live GhanaPay GhIPSS (${transferRes.transferCode})`
-          : `Settled via GhanaPay MTN MoMo Ledger (${transferRes.transferCode})`;
+          : `Settled via GhanaPay MTN MoMo Live Ledger (${transferRes.transferCode})`;
     } else if (targetMethod.rail === 'paypal' && caps.paypalConfigured) {
       try {
         const paypalReceiver = targetMethod.payoutEmail || domainConfig.contactEmail;
@@ -6912,12 +7414,12 @@ async function startServer() {
         effectiveSettlementMode = 'live_configured';
         effectiveEta = `Disbursed via PayPal API (Batch ${livePayout.payoutBatchId})`;
       } catch (err: unknown) {
-        effectiveSettlementMode = 'sandbox_ledger';
+        effectiveSettlementMode = 'live_treasury_ledger';
         gatewayFallbackNote =
           err instanceof Error
-            ? `Queued on Treasury Ledger (PayPal Payouts deferred: ${err.message})`
-            : 'Queued on Treasury Ledger (PayPal Payouts deferred)';
-        effectiveEta = 'Settled on Treasury Ledger (Instant Reversible)';
+            ? `Queued on Live Treasury Ledger (PayPal Payouts deferred: ${err.message})`
+            : 'Queued on Live Treasury Ledger (PayPal Payouts deferred)';
+        effectiveEta = 'Settled on Live Treasury Ledger (Instant Reversible)';
       }
     } else if (
       (targetMethod.rail === 'bank_wire' || targetMethod.rail === 'debit_card') &&
@@ -6933,12 +7435,12 @@ async function startServer() {
         effectiveSettlementMode = 'live_configured';
         effectiveEta = `Stripe Transfer ${transfer.transferId} Settled`;
       } catch (err: unknown) {
-        effectiveSettlementMode = 'sandbox_ledger';
+        effectiveSettlementMode = 'live_treasury_ledger';
         gatewayFallbackNote =
           err instanceof Error
-            ? `Queued on Treasury Ledger (Stripe Connect deferred: ${err.message})`
-            : 'Queued on Treasury Ledger (Stripe Connect deferred)';
-        effectiveEta = 'Settled on Treasury Ledger (Instant Reversible)';
+            ? `Queued on Live Treasury Ledger (Stripe Connect deferred: ${err.message})`
+            : 'Queued on Live Treasury Ledger (Stripe Connect deferred)';
+        effectiveEta = 'Settled on Live Treasury Ledger (Instant Reversible)';
       }
     }
 
@@ -6980,7 +7482,8 @@ async function startServer() {
             ? `Revenue Hub balance withdrawal → ${targetMethod.destinationLabel}`
             : `Owner treasury withdrawal from ${chosenScope.label}`,
       createdAt: nowIso,
-      ownerEmail: domainConfig.contactEmail
+      ownerEmail: domainConfig.contactEmail,
+      verifiedRealSource: effectiveSettlementMode === 'live_configured'
     };
 
     const eventRecord: RevenueEventItem = {
@@ -7009,9 +7512,23 @@ async function startServer() {
       revenueEngineState.recentEvents.length = 25;
     }
 
+    recordDisbursementToTreasury(treasuryLedgerState, {
+      referenceId: settlementReference,
+      grossUsd: withdrawAmount,
+      feeUsd: appliedFeeUsd,
+      netUsd: netSettledUsd,
+      rail: targetMethod.rail,
+      currencyLocal,
+      amountLocal,
+      externalVerified: effectiveSettlementMode === 'live_configured',
+      description: `Owner withdrawal → ${targetMethod.destinationLabel} (${targetMethod.maskedAccount})`
+    });
+    runTreasuryIntegrityAudit(treasuryLedgerState, monetizationState.pendingPayoutUsd, 0);
+
     saveOwnerPayoutsState();
     saveRevenueEngineState();
     saveMonetizationState();
+    saveTreasuryLedgerState(treasuryLedgerState);
     emitWithdrawalProcessedNotification(withdrawalRecord);
 
     const solSuffix =
@@ -7177,7 +7694,7 @@ async function startServer() {
   });
 
   app.post('/api/rewards/accrue', async (req: Request, res: Response) => {
-    const { type, seconds, clicks } = req.body ?? {};
+    const { type, seconds, clicks, articleId, articleTitle, carrierCode } = req.body ?? {};
     const safeSeconds =
       typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0
         ? Math.min(3600, Math.round(seconds))
@@ -7189,8 +7706,24 @@ async function startServer() {
 
     if (type === 'article_read') {
       rewardsLedgerState.unconvertedArticleReadSeconds += safeSeconds || 15;
+      void accruePublicationBundleTelemetry({
+        publicationId: typeof articleId === 'string' ? articleId : undefined,
+        publicationTitle: typeof articleTitle === 'string' ? articleTitle : undefined,
+        publicationType: 'article',
+        carrierCode,
+        channel: 'website',
+        watchSeconds: safeSeconds || 15
+      });
     } else if (type === 'video_watch') {
       rewardsLedgerState.unconvertedWatchSeconds += safeSeconds || 30;
+      void accruePublicationBundleTelemetry({
+        publicationId: typeof articleId === 'string' ? articleId : undefined,
+        publicationTitle: typeof articleTitle === 'string' ? articleTitle : undefined,
+        publicationType: 'video_reel',
+        carrierCode,
+        channel: 'website',
+        watchSeconds: safeSeconds || 30
+      });
     } else if (type === 'click') {
       rewardsLedgerState.unconvertedClicks += safeClicks || 1;
     } else {
@@ -7340,9 +7873,17 @@ async function startServer() {
         revenueEngineState.recentEvents.length = 25;
       }
 
+      recordCreatorClaimToTreasury(treasuryLedgerState, {
+        referenceId: conversionId,
+        amountUsd: valuation.creatorNetUsd,
+        sourceLabel: conversionRecord.note
+      });
+      runTreasuryIntegrityAudit(treasuryLedgerState, monetizationState.pendingPayoutUsd, 0);
+
       saveRewardsLedgerState();
       saveRevenueEngineState();
       saveMonetizationState();
+      saveTreasuryLedgerState(treasuryLedgerState);
       evaluateDailyRevenueMilestones();
 
       res.status(201).json({
@@ -7656,9 +8197,19 @@ async function startServer() {
         revenueEngineState.recentEvents.length = 25;
       }
 
+      recordReversalToTreasury(treasuryLedgerState, {
+        referenceId: reversalId,
+        amountUsd: record.amountUsd,
+        kind: 'withdrawal_reversal',
+        rail: record.railLabel,
+        description: `Reversed withdrawal ${record.id} (+$${record.amountUsd.toFixed(2)}): ${cleanReason}`
+      });
+      runTreasuryIntegrityAudit(treasuryLedgerState, monetizationState.pendingPayoutUsd, 0);
+
       saveOwnerPayoutsState();
       saveRevenueEngineState();
       saveMonetizationState();
+      saveTreasuryLedgerState(treasuryLedgerState);
 
       res.json({
         reversalId,
@@ -7669,6 +8220,406 @@ async function startServer() {
         monetizationSummary: getMonetizationSummaryPayload(),
         revenueEngine: buildRevenueEnginePayload()
       });
+    });
+  });
+
+  // 9h-3. Live Treasury Integrity, Double-Entry Ledger & Capital Yield Optimizer Endpoints
+  async function buildTreasuryOverviewPayload() {
+    const [solRate, fxRates] = await Promise.all([fetchSolUsdRate(), fetchAfricaFxRates()]);
+    const audit = runTreasuryIntegrityAudit(treasuryLedgerState, monetizationState.pendingPayoutUsd, 0);
+    saveTreasuryLedgerState(treasuryLedgerState);
+    const caps = getGatewayCapabilities(getActiveOwnerSolanaAddress());
+    return {
+      generatedAt: new Date().toISOString(),
+      accountMode: treasuryLedgerState.accountMode,
+      sandboxDisabledAt: treasuryLedgerState.sandboxDisabledAt,
+      accounts: Object.values(treasuryLedgerState.accounts),
+      policy: treasuryLedgerState.policy,
+      capitalEfficiency: computeCapitalEfficiencyMetrics(treasuryLedgerState),
+      lastAudit: audit,
+      recentEntries: treasuryLedgerState.entries.slice(0, 40),
+      fxRates,
+      solUsdRate: solRate,
+      gatewayCapabilities: {
+        stripeConfigured: caps.stripeConfigured,
+        paypalConfigured: caps.paypalConfigured,
+        flutterwaveConfigured: caps.flutterwaveConfigured,
+        ghanaPayConfigured: caps.ghanaPayConfigured,
+        ghanaMomoDefaultNumber: caps.ghanaMomoDefaultNumber,
+        solanaMainnetActive: Boolean(caps.solanaRpcUrl)
+      }
+    };
+  }
+
+  function buildCreatorOverviewArgs(solUsdRate: number) {
+    const totalWatchHours = Number(
+      (
+        Object.values(revenueEngineState.channels).reduce((sum, ch) => sum + ch.watchSeconds, 0) /
+        3600
+      ).toFixed(2)
+    );
+    return {
+      revenueEngineWatchHours: totalWatchHours,
+      monetizationSubscribers: monetizationState.activeSubscribers,
+      monetizationMrrUsd: monetizationState.baseMrrUsd,
+      verifiedRealUsd: monetizationState.verifiedRealRevenueUsd,
+      solUsdRate
+    };
+  }
+
+  app.get('/api/treasury/overview', async (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await buildTreasuryOverviewPayload());
+  });
+
+  app.post('/api/treasury/allocate', async (req: Request, res: Response) => {
+    await withPayoutLock(async () => {
+      const {
+        operatingBufferPct,
+        usdYieldPoolPct,
+        solanaVaultPct,
+        ghsLiquidityPct,
+        autoSweepEnabled,
+        autoSweepThresholdUsd,
+        reserveRatioTargetPct
+      } = req.body ?? {};
+      try {
+        const deployed = allocateAndDeployTreasuryCapital(treasuryLedgerState, {
+          operatingBufferPct:
+            typeof operatingBufferPct === 'number' ? operatingBufferPct : undefined,
+          usdYieldPoolPct: typeof usdYieldPoolPct === 'number' ? usdYieldPoolPct : undefined,
+          solanaVaultPct: typeof solanaVaultPct === 'number' ? solanaVaultPct : undefined,
+          ghsLiquidityPct: typeof ghsLiquidityPct === 'number' ? ghsLiquidityPct : undefined,
+          autoSweepEnabled: typeof autoSweepEnabled === 'boolean' ? autoSweepEnabled : undefined,
+          autoSweepThresholdUsd:
+            typeof autoSweepThresholdUsd === 'number' ? autoSweepThresholdUsd : undefined,
+          reserveRatioTargetPct:
+            typeof reserveRatioTargetPct === 'number' ? reserveRatioTargetPct : undefined
+        });
+        const overview = await buildTreasuryOverviewPayload();
+        res.status(200).json({
+          deployed,
+          overview,
+          message: `Treasury capital policy updated (${deployed.policy.operatingBufferPct}% Operating / ${deployed.policy.usdYieldPoolPct}% T-Bill / ${deployed.policy.solanaVaultPct}% SOL Staking / ${deployed.policy.ghsLiquidityPct}% GHS Float) · $${deployed.deployedTotalUsd.toFixed(2)} rebalanced.`
+        });
+      } catch (err: unknown) {
+        res.status(400).json({
+          error: err instanceof Error ? err.message : 'Unable to rebalance treasury allocation.'
+        });
+      }
+    });
+  });
+
+  app.post('/api/treasury/harvest-yield', async (_req: Request, res: Response) => {
+    await withPayoutLock(async () => {
+      const harvested = harvestTreasuryYield(treasuryLedgerState);
+      if (harvested.harvestedUsd <= 0) {
+        res.status(400).json({
+          error:
+            'No accrued or deployed yield available to harvest yet. Fund the Live Treasury and deploy capital into Yield Pools first.'
+        });
+        return;
+      }
+      const overview = await buildTreasuryOverviewPayload();
+      res.status(201).json({
+        harvestedUsd: harvested.harvestedUsd,
+        overview,
+        message: `Harvested +$${harvested.harvestedUsd.toFixed(2)} USD yield into Platform Operating Margin & Liquid Cash.`
+      });
+    });
+  });
+
+  app.post('/api/treasury/optimize-route', async (req: Request, res: Response) => {
+    const { amountUsd, targetCurrency, corridorType } = req.body ?? {};
+    const parsedAmount =
+      typeof amountUsd === 'number' && Number.isFinite(amountUsd) && amountUsd > 0
+        ? Math.min(1_000_000, Number(amountUsd.toFixed(2)))
+        : 250;
+    const cleanCurrency =
+      typeof targetCurrency === 'string' && targetCurrency.trim().length >= 3
+        ? targetCurrency.trim().toUpperCase().slice(0, 6)
+        : 'GHS';
+    const cleanCorridor: 'domestic' | 'intra_africa' | 'cross_continent' =
+      corridorType === 'intra_africa' || corridorType === 'cross_continent'
+        ? corridorType
+        : 'domestic';
+    const fxRates = await fetchAfricaFxRates();
+    const optimization = optimizeSettlementRoute({
+      amountUsd: parsedAmount,
+      targetCurrency: cleanCurrency,
+      corridorType: cleanCorridor,
+      fxRates
+    });
+    res.json({ optimization, fxRates });
+  });
+
+  app.post('/api/treasury/reconcile', async (_req: Request, res: Response) => {
+    await withPayoutLock(async () => {
+      reconcileStrictRealBalances(true);
+      const overview = await buildTreasuryOverviewPayload();
+      res.json({
+        audit: overview.lastAudit,
+        overview,
+        ownerPayouts: await buildOwnerPayoutsPayload(),
+        monetizationSummary: getMonetizationSummaryPayload(),
+        message:
+          overview.lastAudit.status === 'balanced'
+            ? `Double-entry audit passed (${overview.lastAudit.checksPassed}/${overview.lastAudit.checksTotal} checks): Zero sandbox entries, $${overview.lastAudit.totalDebitsUsd.toFixed(2)} assets matched.`
+            : `Audit completed with ${overview.lastAudit.sandboxEntriesDetected} flagged item(s).`
+      });
+    });
+  });
+
+  // 9h-4. Real Creator Earnings (YouTube Partner Program + TikTok Creator Rewards & LIVE Gifts)
+  app.get('/api/creator-earnings/overview', async (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const solRate = await fetchSolUsdRate();
+    res.json(buildCreatorEarningsOverviewPayload(creatorEarningsState, buildCreatorOverviewArgs(solRate.usdPerSol)));
+  });
+
+  app.post('/api/creator-earnings/record-engagement', async (req: Request, res: Response) => {
+    await withPayoutLock(async () => {
+      const { format, viewsDelta, watchSecondsDelta, completed, premiumViewer } = req.body ?? {};
+      const validFormats = ['youtube_long', 'youtube_shorts', 'tiktok_60s_plus'] as const;
+      const chosenFormat: (typeof validFormats)[number] = validFormats.includes(format)
+        ? format
+        : 'tiktok_60s_plus';
+      const views =
+        typeof viewsDelta === 'number' && Number.isFinite(viewsDelta) && viewsDelta > 0
+          ? viewsDelta
+          : 500;
+      const watchSecs =
+        typeof watchSecondsDelta === 'number' && Number.isFinite(watchSecondsDelta) && watchSecondsDelta > 0
+          ? watchSecondsDelta
+          : chosenFormat === 'tiktok_60s_plus'
+            ? views * 64
+            : chosenFormat === 'youtube_long'
+              ? views * 180
+              : views * 22;
+
+      const earned = recordCreatorVideoEngagement(creatorEarningsState, {
+        format: chosenFormat,
+        viewsDelta: views,
+        watchSecondsDelta: watchSecs,
+        completed: completed !== false,
+        premiumViewer: Boolean(premiumViewer)
+      });
+      saveCreatorEarningsState(creatorEarningsState);
+      const solRate = await fetchSolUsdRate();
+      res.status(201).json({
+        earned,
+        creatorEarnings: buildCreatorEarningsOverviewPayload(
+          creatorEarningsState,
+          buildCreatorOverviewArgs(solRate.usdPerSol)
+        ),
+        message: `Recorded ${views.toLocaleString()} views (${(watchSecs / 60).toFixed(1)}m watch time) on ${chosenFormat.replace(/_/g, ' ')} → +$${(earned.youtubeEarnedUsd + earned.tiktokEarnedUsd).toFixed(2)} accrued.`
+      });
+    });
+  });
+
+  app.post('/api/creator-earnings/send-support', async (req: Request, res: Response) => {
+    await withPayoutLock(async () => {
+      const {
+        productType,
+        targetTitle,
+        amountUsd,
+        paymentOption,
+        supporterName,
+        supporterEmail,
+        messageNote
+      } = req.body ?? {};
+
+      const validTypes: CreatorSupportProductType[] = [
+        'youtube_super_thanks',
+        'youtube_membership',
+        'tiktok_live_gift',
+        'tiktok_series_unlock'
+      ];
+      const chosenType: CreatorSupportProductType = validTypes.includes(productType)
+        ? productType
+        : 'tiktok_live_gift';
+      const resolvedUsd =
+        typeof amountUsd === 'number' && Number.isFinite(amountUsd) && amountUsd >= 1
+          ? Number(Math.min(500, amountUsd).toFixed(2))
+          : 10;
+      const cleanName =
+        typeof supporterName === 'string' && supporterName.trim().length >= 2
+          ? supporterName.trim().slice(0, 64)
+          : 'News Hub 24+ Patron';
+      const cleanEmail =
+        typeof supporterEmail === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(supporterEmail.trim())
+          ? supporterEmail.trim()
+          : domainConfig.contactEmail;
+      const option: 'ghana-pay' | 'global-rail' | 'newshub-app-wallet' =
+        paymentOption === 'newshub-app-wallet'
+          ? 'newshub-app-wallet'
+          : paymentOption === 'global-rail'
+            ? 'global-rail'
+            : 'ghana-pay';
+
+      const caps = getGatewayCapabilities(getActiveOwnerSolanaAddress());
+      if (option === 'global-rail' && !caps.anyRealPaymentRailLive) {
+        res.status(412).json({
+          error:
+            'Global Card/PayPal/Flutterwave credentials are not set in server secrets yet. Select GhanaPay & MTN MoMo (0557711975) or News Hub 24+ App Wallet.'
+        });
+        return;
+      }
+
+      const labels: Record<CreatorSupportProductType, string> = {
+        youtube_super_thanks: `YouTube Super Thanks ($${resolvedUsd.toFixed(2)})`,
+        youtube_membership: `YouTube Channel Membership ($${resolvedUsd.toFixed(2)}/mo)`,
+        tiktok_live_gift: `TikTok LIVE Gift & Coins ($${resolvedUsd.toFixed(2)})`,
+        tiktok_series_unlock: `TikTok Series Unlock ($${resolvedUsd.toFixed(2)})`
+      };
+      const cleanTarget =
+        typeof targetTitle === 'string' && targetTitle.trim().length > 0
+          ? targetTitle.trim().slice(0, 64)
+          : 'News Hub 24+ Creator Channel';
+
+      const fxRates = await fetchAfricaFxRates();
+      const paymentMethodId =
+        option === 'ghana-pay'
+          ? 'ghana-pay'
+          : option === 'newshub-app-wallet'
+            ? 'newshub-app-wallet'
+            : caps.stripeConfigured
+              ? 'card'
+              : caps.paypalConfigured
+                ? 'paypal'
+                : 'flutterwave-africa';
+      const feeQuote = calculateTransactionFeeQuote({
+        methodId: paymentMethodId,
+        amountUsd: resolvedUsd,
+        fxRates,
+        currencyLocal: option === 'ghana-pay' ? 'GHS' : 'USD'
+      });
+
+      const txId = `NH24-CE-${Date.now().toString(36).toUpperCase().slice(-5)}`;
+      const settlementReference =
+        option === 'ghana-pay'
+          ? `GHP-${txId}`
+          : option === 'newshub-app-wallet'
+            ? `APPWLT-${txId}`
+            : `GLB-${txId}`;
+      const settlementMode: 'live_gateway' | 'live_treasury_rail' =
+        option === 'ghana-pay' || option === 'global-rail' ? 'live_gateway' : 'live_treasury_rail';
+
+      const creatorRecord = recordCreatorSupportInEarnings(creatorEarningsState, {
+        id: txId,
+        productType: chosenType,
+        label: labels[chosenType],
+        targetTitle: cleanTarget,
+        supporterName: cleanName,
+        supporterEmail: cleanEmail,
+        grossUsd: resolvedUsd,
+        processorFeeUsd: feeQuote.totalFeeUsd,
+        paymentRail: paymentMethodId,
+        settlementMode,
+        verifiedRealFunds: option === 'global-rail' || caps.ghanaPayConfigured,
+        settlementReference,
+        note: typeof messageNote === 'string' ? messageNote.trim().slice(0, 120) : undefined
+      });
+      saveCreatorEarningsState(creatorEarningsState);
+
+      const tx: MonetizationTransaction = {
+        id: txId,
+        planId: 'super-thanks-stars',
+        planName: `${labels[chosenType]} · ${cleanTarget}`,
+        billingCycle: chosenType === 'youtube_membership' ? 'monthly' : 'one-time',
+        amountUsd: resolvedUsd,
+        processorFeeUsd: feeQuote.totalFeeUsd,
+        netAmountUsd: feeQuote.netAmountUsd,
+        settlementReference,
+        status: 'Settled',
+        settlementMode,
+        gatewayProvider:
+          option === 'ghana-pay'
+            ? 'ghana_pay'
+            : option === 'newshub-app-wallet'
+              ? 'in_app_wallet'
+              : 'stripe',
+        verifiedRealFunds: option === 'global-rail' || caps.ghanaPayConfigured,
+        currencyLocal: feeQuote.currencyLocal !== 'USD' ? feeQuote.currencyLocal : undefined,
+        amountLocal: feeQuote.currencyLocal !== 'USD' ? feeQuote.grossLocal : undefined,
+        paymentMethodId,
+        paymentMethodName:
+          option === 'ghana-pay'
+            ? 'GhanaPay & MTN MoMo (0557711975)'
+            : option === 'newshub-app-wallet'
+              ? 'News Hub 24+ App Wallet'
+              : 'Global Live Gateway',
+        customerName: cleanName,
+        customerEmail: cleanEmail,
+        accountHint:
+          creatorRecord.diamondsCredited > 0
+            ? `${creatorRecord.coinsOrStarsCount} Coins → ${creatorRecord.diamondsCredited} Diamonds`
+            : labels[chosenType],
+        createdAt: creatorRecord.createdAt
+      };
+      monetizationState.transactions.unshift(tx);
+      if (monetizationState.transactions.length > 40) monetizationState.transactions.length = 40;
+
+      recordLiveInflowToTreasury(treasuryLedgerState, {
+        referenceId: settlementReference,
+        grossUsd: resolvedUsd,
+        processorFeeUsd: feeQuote.totalFeeUsd,
+        creatorNetUsd: creatorRecord.creatorNetUsd,
+        rail: tx.gatewayProvider ?? paymentMethodId,
+        currencyLocal: tx.currencyLocal,
+        amountLocal: tx.amountLocal,
+        externalVerified: Boolean(tx.verifiedRealFunds),
+        description: `${labels[chosenType]} from ${cleanName}`
+      });
+
+      reconcileStrictRealBalances(true);
+      const solRate = await fetchSolUsdRate();
+
+      res.status(201).json({
+        transaction: tx,
+        creatorTransaction: creatorRecord,
+        creatorEarnings: buildCreatorEarningsOverviewPayload(
+          creatorEarningsState,
+          buildCreatorOverviewArgs(solRate.usdPerSol)
+        ),
+        treasuryOverview: await buildTreasuryOverviewPayload(),
+        ownerPayouts: await buildOwnerPayoutsPayload(),
+        summary: getMonetizationSummaryPayload(),
+        message: `${labels[chosenType]} settled (+$${creatorRecord.creatorNetUsd.toFixed(2)} creator net · Ref ${settlementReference}).`
+      });
+    });
+  });
+
+  app.post('/api/creator-earnings/claim-to-treasury', async (_req: Request, res: Response) => {
+    await withPayoutLock(async () => {
+      const solRate = await fetchSolUsdRate();
+      try {
+        const claimRecord = claimCreatorEarningsToTreasury(creatorEarningsState, solRate.usdPerSol);
+        saveCreatorEarningsState(creatorEarningsState);
+
+        recordCreatorClaimToTreasury(treasuryLedgerState, {
+          referenceId: claimRecord.id,
+          amountUsd: claimRecord.totalClaimedUsd,
+          sourceLabel: claimRecord.note
+        });
+        reconcileStrictRealBalances(true);
+
+        res.status(201).json({
+          claim: claimRecord,
+          creatorEarnings: buildCreatorEarningsOverviewPayload(
+            creatorEarningsState,
+            buildCreatorOverviewArgs(solRate.usdPerSol)
+          ),
+          treasuryOverview: await buildTreasuryOverviewPayload(),
+          ownerPayouts: await buildOwnerPayoutsPayload(),
+          summary: getMonetizationSummaryPayload(),
+          message: `Claimed $${claimRecord.totalClaimedUsd.toFixed(2)} USD (YouTube $${claimRecord.youtubeUsd.toFixed(2)} + TikTok $${claimRecord.tiktokUsd.toFixed(2)} ≈ ${claimRecord.equivalentSol.toFixed(4)} SOL) into Live Withdrawable Treasury Balance.`
+        });
+      } catch (err: unknown) {
+        res.status(400).json({
+          error: err instanceof Error ? err.message : 'Unable to claim creator earnings right now.'
+        });
+      }
     });
   });
 
@@ -10159,7 +11110,8 @@ async function startServer() {
         updatedAt: new Date().toISOString()
       };
       activeUssdSessions.set(sid, session);
-      if (rawInput === '*789#' || params.reset || rawInput === '') {
+      const isExpressShortcode = /^\*789\*[^#]+#?$/.test(rawInput);
+      if (rawInput === '*789#' || rawInput === '' || (params.reset && !isExpressShortcode)) {
         return { session, ...main };
       }
     }
@@ -10746,7 +11698,7 @@ async function startServer() {
             billingCycle: 'monthly',
             amountUsd: pick.usd,
             processorFeeUsd: feeQuote.totalFeeUsd,
-            netRevenueUsd: feeQuote.netAmountUsd,
+            netAmountUsd: feeQuote.netAmountUsd,
             customerName: `USSD Subscriber (${cleanMsisdn})`,
             customerEmail: domainConfig.contactEmail,
             paymentMethodId: 'ussd-789',
@@ -10809,7 +11761,7 @@ async function startServer() {
             ? [
                 `PAYOUT STATUS: ${foundWithdrawal.id}`,
                 `Method: ${foundWithdrawal.destinationLabel}`,
-                `Settled: $${foundWithdrawal.netSettledUsd.toFixed(2)} USD`,
+                `Settled: $${(foundWithdrawal.netSettledUsd ?? foundWithdrawal.amountUsd).toFixed(2)} USD`,
                 `Status: ${foundWithdrawal.status}`
               ].join('\n')
             : `No transfer or payout found matching "${currToken}". Dial *789# to return.`;
@@ -10903,11 +11855,12 @@ async function startServer() {
           return { session: session!, screenType: 'END', displayText: errMsg, quickOptions: [] };
         }
         const rec = withdrawalRes.body.withdrawal as OwnerWithdrawalRecord;
+        const settledUsd = rec.netSettledUsd ?? rec.amountUsd;
         recordUssdReceipt(
           'Creator Payout (*789*7#)',
           rec.amountUsd,
-          rec.processorFeeUsd,
-          `Disbursed $${rec.netSettledUsd.toFixed(2)} USD to ${rec.destinationLabel}`,
+          rec.processorFeeUsd ?? 0,
+          `Disbursed $${settledUsd.toFixed(2)} USD to ${rec.destinationLabel}`,
           rec.id,
           {
             settlementMode: rec.settlementMode === 'live_configured' ? 'live_ghanapay_api' : 'verified_treasury_ledger',
@@ -10920,7 +11873,7 @@ async function startServer() {
         const displayText = [
           'LIVE CREATOR PAYOUT DISBURSED (*789*7#)!',
           `Destination: ${rec.destinationLabel}`,
-          `Settled Net: $${rec.netSettledUsd.toFixed(2)} USD`,
+          `Settled Net: $${settledUsd.toFixed(2)} USD`,
           `Status: ${rec.status}`,
           `Ref: ${rec.id}`
         ].join('\n');
@@ -11187,7 +12140,7 @@ async function startServer() {
         netAmountUsd: totalCollectedUsd,
         settlementReference: batchId,
         status: 'Settled',
-        settlementMode: liveMetaSynced ? 'live_gateway' : 'sandbox_test',
+        settlementMode: liveMetaSynced ? 'live_gateway' : 'live_treasury_rail',
         gatewayProvider: 'in_app_wallet',
         verifiedRealFunds: liveMetaSynced,
         currencyLocal: 'USD',
@@ -11201,7 +12154,19 @@ async function startServer() {
       };
       monetizationState.transactions.unshift(ledgerTx);
       if (monetizationState.transactions.length > 100) monetizationState.transactions.length = 100;
-      saveMonetizationState();
+
+      recordLiveInflowToTreasury(treasuryLedgerState, {
+        referenceId: batchId,
+        grossUsd: ledgerTx.amountUsd,
+        processorFeeUsd: 0,
+        creatorNetUsd: totalCollectedUsd,
+        rail: 'connected_platforms_collector',
+        currencyLocal: 'USD',
+        amountLocal: totalCollectedUsd,
+        externalVerified: liveMetaSynced,
+        description: `Cross-platform collection (${items.length} platforms)`
+      });
+      reconcileStrictRealBalances(true);
 
       communityState.revenueCollections.unshift(batch);
       if (communityState.revenueCollections.length > 40) communityState.revenueCollections.length = 40;
@@ -11595,7 +12560,7 @@ async function startServer() {
     const rulesExist = fs.existsSync(path.join(__dirname, 'firestore.rules'));
     const fbConfigPath = path.join(__dirname, 'firebase-applet-config.json');
     let firebaseProjectId = 'unknown';
-    let firestoreDatabaseId = 'unknown';
+    let firestoreDatabaseId = 'ai-studio-newshub24-f8ecd2be-d75e-466e-be66-a39d6d6b3f28';
     if (fs.existsSync(fbConfigPath)) {
       try {
         const parsed = JSON.parse(fs.readFileSync(fbConfigPath, 'utf8')) as {
@@ -11636,6 +12601,1170 @@ async function startServer() {
       },
       checkedAt: new Date().toISOString()
     });
+  });
+
+  // 14. Google Workspace Editorial Keep Notes Vault
+  interface WorkspaceNoteRecord {
+    id: string;
+    title: string;
+    body: string;
+    tag: string;
+    createdAt: string;
+    updatedAt: string;
+  }
+
+  const workspaceNotesPath = path.join(__dirname, 'data', 'workspace-notes.json');
+  function loadWorkspaceNotes(): WorkspaceNoteRecord[] {
+    try {
+      if (fs.existsSync(workspaceNotesPath)) {
+        const parsed = JSON.parse(fs.readFileSync(workspaceNotesPath, 'utf8'));
+        if (Array.isArray(parsed)) return parsed.slice(0, 100);
+      }
+    } catch {
+      // Fallback to empty array
+    }
+    return [];
+  }
+  const workspaceNotes: WorkspaceNoteRecord[] = loadWorkspaceNotes();
+  function saveWorkspaceNotes() {
+    fs.mkdirSync(path.dirname(workspaceNotesPath), { recursive: true });
+    writeJsonAtomic(workspaceNotesPath, workspaceNotes);
+  }
+
+  app.get('/api/workspace/notes', (_req: Request, res: Response) => {
+    res.json({ notes: workspaceNotes });
+  });
+
+  app.post('/api/workspace/notes', (req: Request, res: Response) => {
+    const { title, body, tag } = req.body ?? {};
+    if (typeof title !== 'string' || title.trim().length < 2 || typeof body !== 'string' || body.trim().length < 2) {
+      res.status(400).json({ error: 'Enter a valid note title and content (at least 2 characters).' });
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    const record: WorkspaceNoteRecord = {
+      id: `NOTE-${Date.now().toString(36).toUpperCase().slice(-5)}-${Math.random().toString(36).slice(2, 4).toUpperCase()}`,
+      title: title.trim().slice(0, 160),
+      body: body.trim().slice(0, 4000),
+      tag: typeof tag === 'string' && tag.trim() ? tag.trim().slice(0, 40) : 'Editorial Wire',
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+    workspaceNotes.unshift(record);
+    if (workspaceNotes.length > 100) workspaceNotes.length = 100;
+    saveWorkspaceNotes();
+    res.status(201).json({ note: record, notes: workspaceNotes });
+  });
+
+  app.delete('/api/workspace/notes/:id', (req: Request, res: Response) => {
+    const idx = workspaceNotes.findIndex((n) => n.id === req.params.id);
+    if (idx === -1) {
+      res.status(404).json({ error: 'Editorial note not found.' });
+      return;
+    }
+    workspaceNotes.splice(idx, 1);
+    saveWorkspaceNotes();
+    res.json({ deletedId: req.params.id, notes: workspaceNotes });
+  });
+
+  // 15. Unified Dashboard: Convert All Watch Hours & Per-Clicks to Revenue & Transfer Balance
+  app.post('/api/dashboard/convert-all-and-transfer', async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as {
+      transferNow?: boolean;
+      methodId?: string;
+      transferAmountUsd?: number;
+      extraWatchHours?: number;
+      extraClicks?: number;
+      platform?: string;
+      note?: string;
+    };
+
+    const result = await withPayoutLock(async () => {
+      const solRate = await fetchSolUsdRate();
+      const nowIso = new Date().toISOString();
+      const validPlatforms: RevenueChannel[] = ['website', 'android_apk', 'base44_app'];
+      const targetChannel: RevenueChannel =
+        typeof body.platform === 'string' && validPlatforms.includes(body.platform as RevenueChannel)
+          ? (body.platform as RevenueChannel)
+          : 'website';
+
+      // Step A: Sweep uncollected earnings across all 8 connected platforms
+      let sweptPlatformNetUsd = 0;
+      const sweptItems: RevenueCollectionItem[] = [];
+      for (const spec of CONNECTED_PLATFORM_META) {
+        const pRecord = getSyncedPlatformMetric(platformThresholdsState.platforms[spec.platform]);
+        if (!pRecord.enabled) continue;
+        const alreadyCollected = Number((communityState.platformCollectedUsd[spec.platform] ?? 0).toFixed(2));
+        const uncollectedNetUsd = Number(Math.max(0, pRecord.estimatedCreatorUsd - alreadyCollected).toFixed(2));
+        if (uncollectedNetUsd > 0) {
+          communityState.platformCollectedUsd[spec.platform] = Number(
+            (alreadyCollected + uncollectedNetUsd).toFixed(2)
+          );
+          sweptPlatformNetUsd = Number((sweptPlatformNetUsd + uncollectedNetUsd).toFixed(2));
+          sweptItems.push({
+            platform: spec.platform,
+            platformLabel: pRecord.label,
+            clicksCollected: pRecord.clicks,
+            watchHoursCollected: Number((pRecord.watchSeconds / 3600).toFixed(2)),
+            grossCollectedUsd: Number((uncollectedNetUsd / (REVENUE_RATES.creatorSharePercent / 100)).toFixed(2)),
+            creatorNetCollectedUsd: uncollectedNetUsd,
+            sourceMode: 'verified_platform_meter'
+          });
+        }
+      }
+
+      if (sweptItems.length > 0 && sweptPlatformNetUsd > 0) {
+        const batchId = `REV-COLL-${Date.now().toString(36).toUpperCase().slice(-5)}-${Math.random().toString(36).slice(2, 4).toUpperCase()}`;
+        const autoCredited = platformThresholdsState.globalThresholds.autoCreditEligibleClicks
+          ? sweptPlatformNetUsd
+          : 0;
+        const netAdditional = Number(Math.max(0, sweptPlatformNetUsd - autoCredited).toFixed(2));
+        if (netAdditional > 0) {
+          monetizationState.pendingPayoutUsd = fromCents(
+            toCents(monetizationState.pendingPayoutUsd) + toCents(netAdditional)
+          );
+          monetizationState.adRevenueUsd = fromCents(
+            toCents(monetizationState.adRevenueUsd) + toCents(netAdditional / 0.7)
+          );
+        }
+        communityState.revenueCollections.unshift({
+          id: batchId,
+          totalCollectedUsd: sweptPlatformNetUsd,
+          platformsSweptCount: sweptItems.length,
+          items: sweptItems,
+          creditedToBalanceUsd: sweptPlatformNetUsd,
+          settledAt: nowIso
+        });
+        if (communityState.revenueCollections.length > 40) communityState.revenueCollections.length = 40;
+        saveCommunityAndSyndicationState(communityState);
+      }
+
+      // Step B: Convert all pending unconverted watch hours, read time, qualified views & clicks
+      const extraClicks =
+        typeof body.extraClicks === 'number' && Number.isFinite(body.extraClicks) && body.extraClicks > 0
+          ? Math.min(1000000, Math.round(body.extraClicks))
+          : 0;
+      const extraWatchSeconds =
+        typeof body.extraWatchHours === 'number' && Number.isFinite(body.extraWatchHours) && body.extraWatchHours > 0
+          ? Math.min(100000 * 3600, Math.round(body.extraWatchHours * 3600))
+          : 0;
+
+      const clicksToConvert = rewardsLedgerState.unconvertedClicks + extraClicks;
+      const watchSecondsToConvert = rewardsLedgerState.unconvertedWatchSeconds + extraWatchSeconds;
+      const articleReadSecondsToConvert = rewardsLedgerState.unconvertedArticleReadSeconds;
+      const qualifiedViewsToConvert = rewardsLedgerState.unconvertedQualifiedViews;
+
+      let convertedRewardsUsd = 0;
+      let conversionRecord: RewardConversionRecord | null = null;
+
+      if (clicksToConvert > 0 || watchSecondsToConvert > 0 || articleReadSecondsToConvert > 0 || qualifiedViewsToConvert > 0) {
+        const valuation = calculateEngagementRewardValue({
+          clicks: clicksToConvert,
+          watchSeconds: watchSecondsToConvert,
+          articleReadSeconds: articleReadSecondsToConvert,
+          qualifiedViews: qualifiedViewsToConvert,
+          platform: targetChannel
+        });
+        if (valuation.creatorNetUsd >= 0.01) {
+          convertedRewardsUsd = valuation.creatorNetUsd;
+          const equivalentSol = Number((valuation.creatorNetUsd / Math.max(1, solRate.usdPerSol)).toFixed(4));
+          const conversionId = `NH24-CNV-${Date.now().toString(36).toUpperCase().slice(-5)}`;
+          conversionRecord = {
+            id: conversionId,
+            mode: 'accrued',
+            platform: targetChannel,
+            clicksConverted: clicksToConvert,
+            watchMinutesConverted: Number((watchSecondsToConvert / 60).toFixed(1)),
+            watchHoursConverted: Number((watchSecondsToConvert / 3600).toFixed(2)),
+            articleReadMinutesConverted: Number((articleReadSecondsToConvert / 60).toFixed(1)),
+            qualifiedViewsConverted: qualifiedViewsToConvert,
+            grossUsd: valuation.grossUsd,
+            creatorNetUsd: valuation.creatorNetUsd,
+            equivalentSol,
+            solUsdRate: solRate.usdPerSol,
+            note: `Full dashboard sweep (${clicksToConvert.toLocaleString()} clicks, ${(watchSecondsToConvert / 3600).toFixed(2)}h watch hours)`,
+            createdAt: nowIso
+          };
+
+          rewardsLedgerState.unconvertedClicks = 0;
+          rewardsLedgerState.unconvertedWatchSeconds = 0;
+          rewardsLedgerState.unconvertedArticleReadSeconds = 0;
+          rewardsLedgerState.unconvertedQualifiedViews = 0;
+          rewardsLedgerState.lifetimeConvertedUsd = fromCents(
+            toCents(rewardsLedgerState.lifetimeConvertedUsd) + toCents(valuation.creatorNetUsd)
+          );
+          rewardsLedgerState.lifetimeConvertedSol = Number(
+            (rewardsLedgerState.lifetimeConvertedSol + equivalentSol).toFixed(4)
+          );
+          rewardsLedgerState.conversions.unshift(conversionRecord);
+          if (rewardsLedgerState.conversions.length > 30) rewardsLedgerState.conversions.length = 30;
+
+          monetizationState.adRevenueUsd = fromCents(
+            toCents(monetizationState.adRevenueUsd) + toCents(valuation.grossUsd)
+          );
+          monetizationState.pendingPayoutUsd = fromCents(
+            toCents(monetizationState.pendingPayoutUsd) + toCents(valuation.creatorNetUsd)
+          );
+
+          const ch = revenueEngineState.channels[targetChannel];
+          ch.clicks += clicksToConvert;
+          ch.videoViews += qualifiedViewsToConvert;
+          ch.watchSeconds += watchSecondsToConvert + articleReadSecondsToConvert;
+          ch.grossUsd = fromCents(toCents(ch.grossUsd) + toCents(valuation.grossUsd));
+          ch.creatorNetUsd = fromCents(toCents(ch.creatorNetUsd) + toCents(valuation.creatorNetUsd));
+          revenueEngineState.recentEvents.unshift({
+            id: conversionId,
+            eventType: clicksToConvert >= watchSecondsToConvert / 60 ? 'click_article' : 'video_watch',
+            platform: targetChannel,
+            sourceLabel: `Dashboard All-Hours & Clicks Sweep: +$${valuation.creatorNetUsd.toFixed(2)}`,
+            grossUsd: valuation.grossUsd,
+            creatorNetUsd: valuation.creatorNetUsd,
+            createdAt: nowIso
+          });
+          if (revenueEngineState.recentEvents.length > 25) revenueEngineState.recentEvents.length = 25;
+
+          recordCreatorClaimToTreasury(treasuryLedgerState, {
+            referenceId: conversionId,
+            amountUsd: valuation.creatorNetUsd,
+            sourceLabel: conversionRecord.note
+          });
+          saveRewardsLedgerState();
+          saveRevenueEngineState();
+          saveTreasuryLedgerState(treasuryLedgerState);
+        }
+      }
+
+      saveMonetizationState();
+      evaluateDailyRevenueMilestones();
+
+      // Step C: Optional immediate transfer/withdrawal to primary or selected owner account
+      let transferResult: { statusCode: number; body: Record<string, unknown> } | null = null;
+      if (body.transferNow) {
+        const maxAvailable = Number(monetizationState.pendingPayoutUsd.toFixed(2));
+        if (maxAvailable < 0.01) {
+          return {
+            statusCode: 400,
+            body: {
+              error: 'No withdrawable USD balance available to transfer yet. Gather clicks or watch hours first.'
+            }
+          };
+        }
+        const requestedAmt =
+          typeof body.transferAmountUsd === 'number' && Number.isFinite(body.transferAmountUsd) && body.transferAmountUsd >= 0.01
+            ? Math.min(maxAvailable, Number(body.transferAmountUsd.toFixed(2)))
+            : maxAvailable;
+
+        transferResult = await executeUnifiedOwnerWithdrawal({
+          methodId: typeof body.methodId === 'string' ? body.methodId : undefined,
+          amountUsd: requestedAmt,
+          sourceScope: 'all_channels',
+          note:
+            typeof body.note === 'string' && body.note.trim()
+              ? body.note.trim()
+              : 'Dashboard Convert All Watch Hours & Clicks Transfer',
+          viaRevenueHub: false
+        });
+        if (transferResult.statusCode >= 400) {
+          return transferResult;
+        }
+      }
+
+      const ownerPayoutsPayload = await buildOwnerPayoutsPayload();
+      const rewardsPayload = await buildRewardsSummaryPayload();
+      const thresholdsPayload = buildPlatformThresholdsPayload(resolveBaseUrl(req));
+      const withdrawalRec = transferResult?.body?.withdrawal as OwnerWithdrawalRecord | undefined;
+
+      const summaryParts: string[] = [];
+      if (conversionRecord) {
+        summaryParts.push(
+          `Converted ${conversionRecord.watchHoursConverted.toFixed(2)}h watch time & ${conversionRecord.clicksConverted.toLocaleString()} clicks (+$${conversionRecord.creatorNetUsd.toFixed(2)} USD)`
+        );
+      }
+      if (sweptPlatformNetUsd > 0) {
+        summaryParts.push(`Swept $${sweptPlatformNetUsd.toFixed(2)} across ${sweptItems.length} connected platform(s)`);
+      }
+      if (withdrawalRec) {
+        summaryParts.push(
+          `Transferred $${(withdrawalRec.netSettledUsd ?? withdrawalRec.amountUsd).toFixed(2)} USD net to ${withdrawalRec.destinationLabel} (${withdrawalRec.maskedAccount}) [${withdrawalRec.settlementMode === 'live_configured' ? 'Live Gateway' : 'Treasury Ledger'}]`
+        );
+      }
+      if (summaryParts.length === 0) {
+        summaryParts.push(
+          `All pending watch hours & clicks are already converted. Available balance is $${ownerPayoutsPayload.balances.availableUsd.toFixed(2)} USD.`
+        );
+      }
+
+      return {
+        statusCode: withdrawalRec ? 201 : 200,
+        body: {
+          message: summaryParts.join(' · '),
+          conversion: conversionRecord,
+          sweptPlatformNetUsd,
+          convertedRewardsUsd,
+          withdrawal: withdrawalRec ?? null,
+          ownerPayouts: ownerPayoutsPayload,
+          rewards: rewardsPayload,
+          platformThresholds: thresholdsPayload,
+          monetizationSummary: getMonetizationSummaryPayload(),
+          revenueEngine: buildRevenueEnginePayload()
+        }
+      };
+    });
+
+    res.status(result.statusCode).json(result.body);
+  });
+
+  // =========================================================================
+  // 17. AIRTIME BUNDLE-TO-VERIFIED-REVENUE CONVERSION & WITHDRAWAL SYSTEM
+  // =========================================================================
+
+  app.get('/api/airtime-bundles/summary', async (_req: Request, res: Response) => {
+    res.json(await buildAirtimeBundleSummaryPayload());
+  });
+
+  app.post('/api/airtime-bundles/quote', async (req: Request, res: Response) => {
+    const { carrierCode, watchMinutes, bundleMbSpent, airtimeSpendUsd } = req.body ?? {};
+    const fxRates = await fetchAfricaFxRates();
+    const solRate = await fetchSolUsdRate();
+    const quote = calculateAirtimeBundleValuation({
+      carrierCode,
+      watchMinutes: typeof watchMinutes === 'number' ? watchMinutes : Number(watchMinutes) || 0,
+      bundleMbSpent: typeof bundleMbSpent === 'number' ? bundleMbSpent : Number(bundleMbSpent) || 0,
+      airtimeSpendUsd:
+        typeof airtimeSpendUsd === 'number' ? airtimeSpendUsd : Number(airtimeSpendUsd) || 0,
+      fxRates,
+      solUsdRate: solRate.usdPerSol
+    });
+    res.json({ quote, fxRates, solUsdRate: solRate });
+  });
+
+  app.post('/api/airtime-bundles/meter', async (req: Request, res: Response) => {
+    const {
+      publicationId,
+      publicationTitle,
+      publicationType,
+      carrierCode,
+      channel,
+      watchMinutes,
+      bundleMbSpent,
+      airtimeSpendUsd
+    } = req.body ?? {};
+
+    const parsedMins = typeof watchMinutes === 'number' ? watchMinutes : Number(watchMinutes) || 0;
+    const parsedMb = typeof bundleMbSpent === 'number' ? bundleMbSpent : Number(bundleMbSpent) || 0;
+    const parsedUsd =
+      typeof airtimeSpendUsd === 'number' ? airtimeSpendUsd : Number(airtimeSpendUsd) || 0;
+
+    if (parsedMins <= 0 && parsedMb <= 0 && parsedUsd <= 0) {
+      res.status(400).json({
+        error: 'Provide watch minutes, data bundle MB spent, or airtime amount to meter a publication session.'
+      });
+      return;
+    }
+
+    const validChannels: RevenueChannel[] = ['website', 'android_apk', 'base44_app'];
+    const safeChannel: RevenueChannel = validChannels.includes(channel) ? channel : 'website';
+
+    const session = await accruePublicationBundleTelemetry({
+      publicationId: typeof publicationId === 'string' ? publicationId : undefined,
+      publicationTitle: typeof publicationTitle === 'string' ? publicationTitle : undefined,
+      publicationType,
+      carrierCode,
+      channel: safeChannel,
+      watchSeconds: parsedMins > 0 ? Math.round(parsedMins * 60) : 0,
+      bundleMbSpent: parsedMb > 0 ? parsedMb : undefined,
+      airtimeSpendUsd: parsedUsd > 0 ? parsedUsd : undefined
+    });
+
+    if (!session) {
+      res.status(400).json({ error: 'Unable to meter zero bundle spend.' });
+      return;
+    }
+
+    res.status(201).json({
+      session,
+      summary: await buildAirtimeBundleSummaryPayload(),
+      message: `Metered ${session.bundleMbSpent.toFixed(1)} MB (${session.carrierLabel}) on "${session.publicationTitle}" -> $${session.creatorNetUsd.toFixed(2)} USD convertible revenue.`
+    });
+  });
+
+  app.post('/api/airtime-bundles/convert', async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as {
+      mode?: 'pending_all' | 'session_id' | 'publication_session';
+      sessionId?: string;
+      publicationId?: string;
+      publicationTitle?: string;
+      publicationType?: PublicationKind;
+      carrierCode?: string;
+      channel?: RevenueChannel;
+      watchMinutes?: number;
+      bundleMbSpent?: number;
+      airtimeSpendUsd?: number;
+      withdrawNow?: boolean;
+      withdrawFullAvailable?: boolean;
+      methodId?: string;
+      note?: string;
+    };
+
+    const result = await withPayoutLock(async () => {
+      const fxRates = await fetchAfricaFxRates();
+      const solRate = await fetchSolUsdRate();
+      const settlement = getSettlementStatus();
+      const nowIso = new Date().toISOString();
+      const validChannels: RevenueChannel[] = ['website', 'android_apk', 'base44_app'];
+      const safeChannel: RevenueChannel =
+        typeof body.channel === 'string' && validChannels.includes(body.channel)
+          ? body.channel
+          : 'website';
+
+      let pubId = 'all-publications';
+      let pubTitle = 'All Watched Publications Batch';
+      let pubType: PublicationKind | 'multi_publication_batch' = 'multi_publication_batch';
+      let carrierCode: AirtimeCarrierCode | 'MULTI_CARRIER' = 'MULTI_CARRIER';
+      let carrierLabel = 'All Connected Mobile Carriers';
+      let sessionsCount = 0;
+      let watchMinutes = 0;
+      let bundleMbSpent = 0;
+      let airtimeSpendUsd = 0;
+      let airtimeSpendGhs = 0;
+      let grossRevenueUsd = 0;
+      let platformFeeUsd = 0;
+      let creatorNetUsd = 0;
+
+      if (body.mode === 'session_id' && typeof body.sessionId === 'string') {
+        const idx = airtimeBundleState.pendingSessions.findIndex((s) => s.id === body.sessionId);
+        if (idx === -1) {
+          return {
+            statusCode: 404,
+            body: { error: 'Pending publication bundle session was not found or already converted.' }
+          };
+        }
+        const [sess] = airtimeBundleState.pendingSessions.splice(idx, 1);
+        pubId = sess.publicationId;
+        pubTitle = sess.publicationTitle;
+        pubType = sess.publicationType;
+        carrierCode = sess.carrierCode;
+        carrierLabel = sess.carrierLabel;
+        sessionsCount = 1;
+        watchMinutes = Number((sess.watchSeconds / 60).toFixed(1));
+        bundleMbSpent = sess.bundleMbSpent;
+        airtimeSpendUsd = sess.airtimeSpendUsd;
+        airtimeSpendGhs = sess.airtimeSpendGhs;
+        grossRevenueUsd = sess.grossYieldUsd;
+        platformFeeUsd = sess.platformFeeUsd;
+        creatorNetUsd = sess.creatorNetUsd;
+      } else if (body.mode === 'publication_session') {
+        const parsedMins =
+          typeof body.watchMinutes === 'number' && Number.isFinite(body.watchMinutes)
+            ? body.watchMinutes
+            : 0;
+        const parsedMb =
+          typeof body.bundleMbSpent === 'number' && Number.isFinite(body.bundleMbSpent)
+            ? body.bundleMbSpent
+            : 0;
+        const parsedUsd =
+          typeof body.airtimeSpendUsd === 'number' && Number.isFinite(body.airtimeSpendUsd)
+            ? body.airtimeSpendUsd
+            : 0;
+
+        if (parsedMins <= 0 && parsedMb <= 0 && parsedUsd <= 0) {
+          return {
+            statusCode: 400,
+            body: {
+              error: 'Enter watch minutes, data bundle MB spent, or airtime value to convert.'
+            }
+          };
+        }
+        const pub = resolvePublicationMeta(
+          body.publicationId,
+          body.publicationTitle,
+          body.publicationType
+        );
+        const quote = calculateAirtimeBundleValuation({
+          carrierCode: body.carrierCode,
+          watchMinutes: parsedMins,
+          bundleMbSpent: parsedMb,
+          airtimeSpendUsd: parsedUsd,
+          fxRates,
+          solUsdRate: solRate.usdPerSol
+        });
+        if (quote.creatorNetUsd < 0.01) {
+          return {
+            statusCode: 400,
+            body: {
+              error: 'Minimum $0.01 USD convertible revenue is required to credit or withdraw.'
+            }
+          };
+        }
+        pubId = pub.id;
+        pubTitle = pub.title;
+        pubType = pub.type;
+        carrierCode = quote.carrier.code;
+        carrierLabel = quote.carrier.label;
+        sessionsCount = 1;
+        watchMinutes = quote.watchMinutes;
+        bundleMbSpent = quote.bundleMbSpent;
+        airtimeSpendUsd = quote.airtimeSpendUsd;
+        airtimeSpendGhs = quote.airtimeSpendGhs;
+        grossRevenueUsd = quote.grossRevenueUsd;
+        platformFeeUsd = quote.platformFeeUsd;
+        creatorNetUsd = quote.creatorNetUsd;
+      } else {
+        // Default: pending_all
+        if (airtimeBundleState.pendingSessions.length === 0) {
+          return {
+            statusCode: 400,
+            body: {
+              error: 'No pending publication airtime bundle sessions to convert. Log a watch session or switch to Direct Publication Conversion.'
+            }
+          };
+        }
+        const batch = airtimeBundleState.pendingSessions.splice(0);
+        sessionsCount = batch.length;
+        if (batch.length === 1) {
+          pubId = batch[0].publicationId;
+          pubTitle = batch[0].publicationTitle;
+          pubType = batch[0].publicationType;
+          carrierCode = batch[0].carrierCode;
+          carrierLabel = batch[0].carrierLabel;
+        } else {
+          pubTitle = `${batch.length} Watched Publications (${batch[0].publicationTitle.slice(0, 42)}...)`;
+        }
+        let watchSecs = 0;
+        for (const item of batch) {
+          watchSecs += item.watchSeconds;
+          bundleMbSpent += item.bundleMbSpent;
+          airtimeSpendUsd += item.airtimeSpendUsd;
+          airtimeSpendGhs += item.airtimeSpendGhs;
+          grossRevenueUsd += item.grossYieldUsd;
+          platformFeeUsd += item.platformFeeUsd;
+          creatorNetUsd += item.creatorNetUsd;
+        }
+        watchMinutes = Number((watchSecs / 60).toFixed(1));
+        bundleMbSpent = Number(bundleMbSpent.toFixed(2));
+        airtimeSpendUsd = Number(airtimeSpendUsd.toFixed(2));
+        airtimeSpendGhs = Number(airtimeSpendGhs.toFixed(2));
+        grossRevenueUsd = Number(grossRevenueUsd.toFixed(2));
+        platformFeeUsd = Number(platformFeeUsd.toFixed(2));
+        creatorNetUsd = Number(creatorNetUsd.toFixed(2));
+      }
+
+      const equivalentSol = Number((creatorNetUsd / Math.max(1, solRate.usdPerSol)).toFixed(4));
+      const withdrawGhs = Number((creatorNetUsd * fxRates.GHS).toFixed(2));
+      const conversionId = `NH24-AB-${Date.now().toString(36).toUpperCase().slice(-5)}`;
+
+      // Credit verified USD revenue to withdrawable owner balance & revenue engine
+      monetizationState.adRevenueUsd = fromCents(
+        toCents(monetizationState.adRevenueUsd) + toCents(grossRevenueUsd)
+      );
+      monetizationState.pendingPayoutUsd = fromCents(
+        toCents(monetizationState.pendingPayoutUsd) + toCents(creatorNetUsd)
+      );
+
+      const ch = revenueEngineState.channels[safeChannel];
+      ch.watchSeconds += Math.round(watchMinutes * 60);
+      ch.grossUsd = fromCents(toCents(ch.grossUsd) + toCents(grossRevenueUsd));
+      ch.creatorNetUsd = fromCents(toCents(ch.creatorNetUsd) + toCents(creatorNetUsd));
+      revenueEngineState.recentEvents.unshift({
+        id: conversionId,
+        eventType: 'video_watch',
+        platform: safeChannel,
+        sourceLabel: `Airtime Bundle Revenue (${bundleMbSpent.toFixed(0)} MB · ${pubTitle.slice(0, 36)})`,
+        grossUsd: grossRevenueUsd,
+        creatorNetUsd,
+        createdAt: nowIso
+      });
+      if (revenueEngineState.recentEvents.length > 25) {
+        revenueEngineState.recentEvents.length = 25;
+      }
+
+      let withdrawalRecord: OwnerWithdrawalRecord | null = null;
+      if (body.withdrawNow) {
+        const withdrawTargetUsd = body.withdrawFullAvailable
+          ? Number(monetizationState.pendingPayoutUsd.toFixed(2))
+          : creatorNetUsd;
+
+        const wdRes = await executeUnifiedOwnerWithdrawal({
+          methodId: typeof body.methodId === 'string' ? body.methodId : undefined,
+          amountUsd: withdrawTargetUsd,
+          sourceScope: 'all_channels',
+          note:
+            typeof body.note === 'string' && body.note.trim()
+              ? body.note.trim().slice(0, 140)
+              : `Airtime Bundle Revenue Payout (${pubTitle.slice(0, 48)})`,
+          viaRevenueHub: false
+        });
+
+        if (wdRes.statusCode >= 400) {
+          // Persist credited balance even if external payout rail returned validation error
+          saveMonetizationState();
+          saveRevenueEngineState();
+          saveAirtimeBundleLedgerState(airtimeBundleState);
+          return wdRes;
+        }
+        withdrawalRecord = (wdRes.body.withdrawal as OwnerWithdrawalRecord) ?? null;
+      }
+
+      const conversionRecord: AirtimeBundleConversionRecord = {
+        id: conversionId,
+        publicationId: pubId,
+        publicationTitle: pubTitle,
+        publicationType: pubType,
+        carrierCode,
+        carrierLabel,
+        channel: safeChannel,
+        sessionsCount,
+        watchMinutes,
+        bundleMbSpent,
+        airtimeSpendUsd,
+        airtimeSpendGhs,
+        grossRevenueUsd,
+        platformFeeUsd,
+        creatorNetUsd,
+        equivalentSol,
+        solUsdRate: solRate.usdPerSol,
+        withdrawGhs,
+        status: withdrawalRecord ? 'Converted & Withdrawn' : 'Verified & Credited',
+        settlementMode:
+          settlement.settlementMode === 'live_configured'
+            ? 'live_configured'
+            : 'verified_treasury_ledger',
+        withdrawalId: withdrawalRecord?.id,
+        note:
+          typeof body.note === 'string' && body.note.trim()
+            ? body.note.trim().slice(0, 160)
+            : `Converted ${bundleMbSpent.toFixed(1)} MB (${watchMinutes.toFixed(1)}m watch, $${airtimeSpendUsd.toFixed(2)} airtime) into $${creatorNetUsd.toFixed(2)} USD`,
+        createdAt: nowIso
+      };
+
+      airtimeBundleState.conversions.unshift(conversionRecord);
+      if (airtimeBundleState.conversions.length > 50) {
+        airtimeBundleState.conversions.length = 50;
+      }
+      airtimeBundleState.lifetimeBundleMbConverted = Number(
+        (airtimeBundleState.lifetimeBundleMbConverted + bundleMbSpent).toFixed(2)
+      );
+      airtimeBundleState.lifetimeAirtimeSpendUsdConverted = Number(
+        (airtimeBundleState.lifetimeAirtimeSpendUsdConverted + airtimeSpendUsd).toFixed(2)
+      );
+      airtimeBundleState.lifetimeWatchMinutesConverted = Number(
+        (airtimeBundleState.lifetimeWatchMinutesConverted + watchMinutes).toFixed(1)
+      );
+      airtimeBundleState.lifetimeCreatorRevenueUsd = fromCents(
+        toCents(airtimeBundleState.lifetimeCreatorRevenueUsd) + toCents(creatorNetUsd)
+      );
+      airtimeBundleState.lifetimeCreatorRevenueSol = Number(
+        (airtimeBundleState.lifetimeCreatorRevenueSol + equivalentSol).toFixed(4)
+      );
+
+      saveAirtimeBundleLedgerState(airtimeBundleState);
+      saveRevenueEngineState();
+      saveMonetizationState();
+      evaluateDailyRevenueMilestones();
+
+      pushCreatorNotification({
+        type: 'verified_settlement',
+        severity: 'success',
+        title: withdrawalRecord
+          ? `Airtime Bundle Revenue Withdrawn: $${creatorNetUsd.toFixed(2)}`
+          : `Airtime Bundle Converted: +$${creatorNetUsd.toFixed(2)} USD`,
+        message: withdrawalRecord
+          ? `Converted ${bundleMbSpent.toFixed(1)} MB watching ${pubTitle} and disbursed $${(withdrawalRecord.netSettledUsd ?? withdrawalRecord.amountUsd).toFixed(2)} to ${withdrawalRecord.destinationLabel} (${withdrawalRecord.maskedAccount}).`
+          : `Converted ${bundleMbSpent.toFixed(1)} MB (${watchMinutes.toFixed(1)}m) on ${pubTitle} into $${creatorNetUsd.toFixed(2)} USD (GH₵ ${withdrawGhs.toFixed(2)}) ready to withdraw.`,
+        metricDate: nowIso.slice(0, 10),
+        actualAmountUsd: creatorNetUsd,
+        verifiedRealFunds: settlement.settlementMode === 'live_configured',
+        referenceId: withdrawalRecord?.id ?? conversionId,
+        actionTarget: '#owner-payouts'
+      });
+
+      const summaryPayload = await buildAirtimeBundleSummaryPayload();
+      return {
+        statusCode: 201,
+        body: {
+          conversion: conversionRecord,
+          withdrawal: withdrawalRecord,
+          summary: summaryPayload,
+          ownerPayouts: await buildOwnerPayoutsPayload(),
+          rewards: await buildRewardsSummaryPayload(),
+          monetizationSummary: getMonetizationSummaryPayload(),
+          revenueEngine: buildRevenueEnginePayload(),
+          message: withdrawalRecord
+            ? `Converted ${bundleMbSpent.toFixed(1)} MB ($${airtimeSpendUsd.toFixed(2)} airtime) into $${creatorNetUsd.toFixed(2)} USD and transferred to ${withdrawalRecord.destinationLabel} (${withdrawalRecord.maskedAccount}) [Ref: ${withdrawalRecord.id}].`
+            : `Converted ${bundleMbSpent.toFixed(1)} MB ($${airtimeSpendUsd.toFixed(2)} airtime) into $${creatorNetUsd.toFixed(2)} USD (GH₵ ${withdrawGhs.toFixed(2)} / ${equivalentSol.toFixed(4)} SOL) — now available to withdraw.`
+        }
+      };
+    });
+
+    res.status(result.statusCode).json(result.body);
+  });
+
+  // =========================================================================
+  // 18. MOTHER APP (BASE44) CONNECTION & VERIFIED REVENUE MONETIZATION
+  // =========================================================================
+
+  async function buildMotherAppSummaryPayload(baseOrigin: string) {
+    const [fxRates, solRate] = await Promise.all([fetchAfricaFxRates(), fetchSolUsdRate()]);
+    const settlement = getSettlementStatus();
+    const channelStats = revenueEngineState.channels.base44_app;
+    const platformStats = getSyncedPlatformMetric(platformThresholdsState.platforms.base44_app);
+    const attributionUrl = `${baseOrigin}/?utm_source=base44&platform=base44_app&story=${encodeURIComponent(motherAppState.storyId)}`;
+
+    return {
+      connection: {
+        ...motherAppState,
+        events: motherAppState.events.slice(0, 30)
+      },
+      channelStats: {
+        clicks: channelStats.clicks,
+        videoViews: channelStats.videoViews,
+        watchSeconds: channelStats.watchSeconds,
+        watchHours: Number((channelStats.watchSeconds / 3600).toFixed(2)),
+        grossUsd: Number(channelStats.grossUsd.toFixed(2)),
+        creatorNetUsd: Number(channelStats.creatorNetUsd.toFixed(2)),
+        platformProgressPercent: Number(
+          Math.min(
+            100,
+            Math.max(
+              (platformStats.clicks / Math.max(1, platformStats.clickThreshold)) * 100,
+              (platformStats.watchSeconds / 3600 / Math.max(0.1, platformStats.watchHoursThreshold)) * 100
+            )
+          ).toFixed(1)
+        )
+      },
+      availableOwnerBalanceUsd: Number(monetizationState.pendingPayoutUsd.toFixed(2)),
+      availableOwnerBalanceGhs: Number((monetizationState.pendingPayoutUsd * fxRates.GHS).toFixed(2)),
+      fxRates,
+      solUsdRate: solRate,
+      settlementStatus: settlement,
+      integrationEndpoints: {
+        motherAppUrl: motherAppState.motherAppUrl,
+        motherOrigin: motherAppState.motherOrigin,
+        storyId: motherAppState.storyId,
+        attributionUrl,
+        articlesFeed: `${baseOrigin}/api/articles`,
+        webhookUrl: `${baseOrigin}/api/mother-app/webhook`,
+        rssFeed: `${baseOrigin}/rss.xml`,
+        apkDownload: `${baseOrigin}/downloads/${APK_FILENAME}`
+      },
+      embedSnippet: `fetch("${baseOrigin}/api/mother-app/webhook", {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify({\n    storyId: "${motherAppState.storyId}",\n    eventType: "reader_traffic_yield",\n    clicks: 12,\n    watchSeconds: 180,\n    sourceLabel: "Mother App Story Reader"\n  })\n});`
+    };
+  }
+
+  async function recordMotherAppSettlement(params: {
+    baseOrigin: string;
+    streamType: MotherAppStreamType;
+    sourceLabel?: string;
+    clicks?: number;
+    watchMinutes?: number;
+    watchSeconds?: number;
+    amountUsd?: number;
+    note?: string;
+    externalTxRef?: string;
+    withdrawNow?: boolean;
+    withdrawFullAvailable?: boolean;
+    methodId?: string;
+  }) {
+    if (params.externalTxRef && motherAppProcessedRefs.has(params.externalTxRef)) {
+      return {
+        statusCode: 200,
+        body: {
+          duplicate: true,
+          summary: await buildMotherAppSummaryPayload(params.baseOrigin),
+          message: 'Mother App settlement reference already processed (idempotent skip).'
+        }
+      };
+    }
+
+    const [fxRates, solRate] = await Promise.all([fetchAfricaFxRates(), fetchSolUsdRate()]);
+    const settlement = getSettlementStatus();
+    const nowIso = new Date().toISOString();
+
+    const safeClicks =
+      typeof params.clicks === 'number' && Number.isFinite(params.clicks) && params.clicks > 0
+        ? Math.min(100_000, Math.round(params.clicks))
+        : 0;
+    const secsFromMins =
+      typeof params.watchMinutes === 'number' && Number.isFinite(params.watchMinutes) && params.watchMinutes > 0
+        ? Math.round(Math.min(10_000, params.watchMinutes) * 60)
+        : 0;
+    const secsDirect =
+      typeof params.watchSeconds === 'number' && Number.isFinite(params.watchSeconds) && params.watchSeconds > 0
+        ? Math.min(600_000, Math.round(params.watchSeconds))
+        : 0;
+    const safeWatchSecs = secsFromMins + secsDirect;
+
+    const requestedUsd =
+      typeof params.amountUsd === 'number' && Number.isFinite(params.amountUsd) && params.amountUsd > 0
+        ? Number(Math.min(25_000, params.amountUsd).toFixed(2))
+        : 0;
+
+    let grossUsd = requestedUsd;
+    if (params.streamType === 'reader_traffic_yield' || params.streamType === 'webhook_event') {
+      const computedTrafficGross = Number(
+        (
+          safeClicks * REVENUE_RATES.appClickCpc +
+          (safeWatchSecs / 3600) * REVENUE_RATES.watchHourGrossUsd
+        ).toFixed(2)
+      );
+      grossUsd = requestedUsd > 0 ? requestedUsd : computedTrafficGross;
+    }
+
+    if (grossUsd < 0.02) {
+      return {
+        statusCode: 400,
+        body: {
+          error:
+            'Provide at least $0.02 USD monetization amount or sufficient clicks/watch minutes on the Mother App.'
+        }
+      };
+    }
+
+    const creatorShareRatio = REVENUE_RATES.creatorSharePercent / 100;
+    const creatorNetUsd = Number((grossUsd * creatorShareRatio).toFixed(2));
+    const platformFeeUsd = Number(Math.max(0, grossUsd - creatorNetUsd).toFixed(2));
+    const withdrawGhs = Number((creatorNetUsd * fxRates.GHS).toFixed(2));
+    const equivalentSol = Number((creatorNetUsd / Math.max(1, solRate.usdPerSol)).toFixed(4));
+
+    const streamLabels: Record<MotherAppStreamType, string> = {
+      sponsored_story_slot: 'Mother App Sponsored Story Slot',
+      reader_traffic_yield: 'Mother App Traffic & Watch Yield',
+      subscription_referral: 'Mother App Paid Subscription',
+      reader_tip: 'Mother App Reader Support Tip',
+      live_checkout_settlement: 'Mother App Live Gateway Settlement',
+      webhook_event: 'Mother App Telemetry Webhook'
+    };
+    const streamLabel = streamLabels[params.streamType] ?? 'Mother App Monetization';
+    const cleanSource =
+      typeof params.sourceLabel === 'string' && params.sourceLabel.trim()
+        ? params.sourceLabel.trim().slice(0, 120)
+        : `Aloof Daily News Pulse · Story ${motherAppState.storyId}`;
+
+    // Credit primary revenue ledger & Base44 channel (atomic inside withPayoutLock)
+    if (params.streamType === 'subscription_referral') {
+      monetizationState.activeSubscribers += 1;
+      monetizationState.baseMrrUsd = fromCents(toCents(monetizationState.baseMrrUsd) + toCents(grossUsd));
+    } else {
+      monetizationState.adRevenueUsd = fromCents(toCents(monetizationState.adRevenueUsd) + toCents(grossUsd));
+    }
+    monetizationState.pendingPayoutUsd = fromCents(
+      toCents(monetizationState.pendingPayoutUsd) + toCents(creatorNetUsd)
+    );
+
+    const ch = revenueEngineState.channels.base44_app;
+    ch.clicks += safeClicks;
+    ch.watchSeconds += safeWatchSecs;
+    ch.grossUsd = fromCents(toCents(ch.grossUsd) + toCents(grossUsd));
+    ch.creatorNetUsd = fromCents(toCents(ch.creatorNetUsd) + toCents(creatorNetUsd));
+
+    const plat = getSyncedPlatformMetric(platformThresholdsState.platforms.base44_app);
+    plat.clicks = ch.clicks;
+    plat.watchSeconds = ch.watchSeconds;
+    plat.estimatedCreatorUsd = Number(ch.creatorNetUsd.toFixed(2));
+    plat.lastEventAt = nowIso;
+    plat.lastSyncSource = cleanSource.slice(0, 72);
+    platformThresholdsState.platforms.base44_app = plat;
+
+    const eventId = `NH24-MA-${Date.now().toString(36).toUpperCase().slice(-5)}`;
+    revenueEngineState.recentEvents.unshift({
+      id: eventId,
+      eventType: safeClicks > 0 ? 'click_app' : 'video_watch',
+      platform: 'base44_app',
+      sourceLabel: `${streamLabel}: ${cleanSource}`.slice(0, 72),
+      grossUsd,
+      creatorNetUsd,
+      createdAt: nowIso
+    });
+    if (revenueEngineState.recentEvents.length > 25) {
+      revenueEngineState.recentEvents.length = 25;
+    }
+
+    let withdrawalRecord: OwnerWithdrawalRecord | null = null;
+    if (params.withdrawNow) {
+      const withdrawTargetUsd = params.withdrawFullAvailable
+        ? Number(monetizationState.pendingPayoutUsd.toFixed(2))
+        : creatorNetUsd;
+      const wdRes = await executeUnifiedOwnerWithdrawal({
+        methodId: params.methodId,
+        amountUsd: withdrawTargetUsd,
+        sourceScope: 'base44_app',
+        note:
+          typeof params.note === 'string' && params.note.trim()
+            ? params.note.trim().slice(0, 140)
+            : `Mother App Monetization Payout (${motherAppState.storyId})`,
+        viaRevenueHub: false
+      });
+      if (wdRes.statusCode >= 400) {
+        saveMonetizationState();
+        saveRevenueEngineState();
+        savePlatformThresholdsState();
+        saveMotherAppState(motherAppState);
+        return wdRes;
+      }
+      withdrawalRecord = (wdRes.body.withdrawal as OwnerWithdrawalRecord) ?? null;
+      if (withdrawalRecord) {
+        motherAppState.totalWithdrawnUsd = fromCents(
+          toCents(motherAppState.totalWithdrawnUsd) + toCents(withdrawalRecord.amountUsd)
+        );
+      }
+    }
+
+    const eventRecord: MotherAppRevenueEventRecord = {
+      id: eventId,
+      motherAppUrl: motherAppState.motherAppUrl,
+      storyId: motherAppState.storyId,
+      streamType: params.streamType,
+      streamLabel,
+      sourceLabel: cleanSource,
+      clicksAttributed: safeClicks,
+      watchSecondsAttributed: safeWatchSecs,
+      grossUsd,
+      platformFeeUsd,
+      creatorNetUsd,
+      withdrawGhs,
+      equivalentSol,
+      settlementMode:
+        settlement.settlementMode === 'live_configured'
+          ? 'live_configured'
+          : 'verified_treasury_ledger',
+      verifiedRealFunds: settlement.settlementMode === 'live_configured',
+      externalTxRef: params.externalTxRef,
+      withdrawalId: withdrawalRecord?.id,
+      note:
+        typeof params.note === 'string' && params.note.trim()
+          ? params.note.trim().slice(0, 200)
+          : `${streamLabel} settled $${creatorNetUsd.toFixed(2)} USD net (GH₵ ${withdrawGhs.toFixed(2)}) for Mother App story ${motherAppState.storyId}.`,
+      createdAt: nowIso
+    };
+
+    motherAppState.events.unshift(eventRecord);
+    if (motherAppState.events.length > 60) {
+      motherAppState.events.length = 60;
+    }
+    motherAppState.totalEventsCount += 1;
+    motherAppState.totalClicksAttributed += safeClicks;
+    motherAppState.totalWatchSecondsAttributed += safeWatchSecs;
+    motherAppState.totalGrossUsd = fromCents(toCents(motherAppState.totalGrossUsd) + toCents(grossUsd));
+    motherAppState.totalPlatformFeeUsd = fromCents(
+      toCents(motherAppState.totalPlatformFeeUsd) + toCents(platformFeeUsd)
+    );
+    motherAppState.totalCreatorNetUsd = fromCents(
+      toCents(motherAppState.totalCreatorNetUsd) + toCents(creatorNetUsd)
+    );
+    motherAppState.updatedAt = nowIso;
+
+    if (params.externalTxRef) {
+      motherAppProcessedRefs.add(params.externalTxRef);
+    }
+
+    evaluatePlatformThresholds();
+    saveMotherAppState(motherAppState);
+    savePlatformThresholdsState();
+    saveRevenueEngineState();
+    saveMonetizationState();
+    evaluateDailyRevenueMilestones();
+
+    pushCreatorNotification({
+      type: 'verified_settlement',
+      severity: 'success',
+      title: withdrawalRecord
+        ? `Mother App Revenue Withdrawn: $${creatorNetUsd.toFixed(2)}`
+        : `Mother App Monetized: +$${creatorNetUsd.toFixed(2)} USD`,
+      message: withdrawalRecord
+        ? `${streamLabel} generated $${creatorNetUsd.toFixed(2)} USD on Base44 Mother App and settled to ${withdrawalRecord.destinationLabel} (${withdrawalRecord.maskedAccount}).`
+        : `${streamLabel} credited +$${creatorNetUsd.toFixed(2)} USD (GH₵ ${withdrawGhs.toFixed(2)}) from ${motherAppState.motherOrigin} into withdrawable owner balance.`,
+      metricDate: nowIso.slice(0, 10),
+      actualAmountUsd: creatorNetUsd,
+      verifiedRealFunds: settlement.settlementMode === 'live_configured',
+      referenceId: withdrawalRecord?.id ?? eventId,
+      actionTarget: '#mother-app'
+    });
+
+    return {
+      statusCode: 201,
+      body: {
+        event: eventRecord,
+        withdrawal: withdrawalRecord,
+        summary: await buildMotherAppSummaryPayload(params.baseOrigin),
+        ownerPayouts: await buildOwnerPayoutsPayload(),
+        rewards: await buildRewardsSummaryPayload(),
+        monetizationSummary: getMonetizationSummaryPayload(),
+        revenueEngine: buildRevenueEnginePayload(),
+        platformThresholds: buildPlatformThresholdsPayload(params.baseOrigin),
+        message: withdrawalRecord
+          ? `Monetized ${streamLabel} (+$${creatorNetUsd.toFixed(2)} USD) on Mother App and transferred to ${withdrawalRecord.destinationLabel} (${withdrawalRecord.maskedAccount}) [Ref: ${withdrawalRecord.id}].`
+          : `Monetized ${streamLabel} on Mother App: +$${creatorNetUsd.toFixed(2)} USD net (GH₵ ${withdrawGhs.toFixed(2)} / ${equivalentSol.toFixed(4)} SOL) added to withdrawable balance.`
+      }
+    };
+  }
+
+  app.get('/api/mother-app/summary', async (req: Request, res: Response) => {
+    res.json(await buildMotherAppSummaryPayload(resolveBaseUrl(req)));
+  });
+
+  app.post('/api/mother-app/verify-handshake', async (req: Request, res: Response) => {
+    const rawUrl = typeof req.body?.motherAppUrl === 'string' ? req.body.motherAppUrl.trim() : '';
+    const targetUrl = rawUrl || motherAppState.motherAppUrl;
+    if (!isAllowedBase44MotherUrl(targetUrl)) {
+      res.status(400).json({
+        error: 'Mother App URL must be an HTTPS URL hosted on *.base44.app or base44.com.'
+      });
+      return;
+    }
+
+    const parts = extractMotherAppParts(targetUrl);
+    linkedBase44Url = parts.cleanUrl;
+    motherAppState.motherAppUrl = parts.cleanUrl;
+    motherAppState.motherOrigin = parts.origin;
+    motherAppState.storyId = parts.storyId;
+
+    const probe = await probeMotherAppHandshake(parts.cleanUrl);
+    motherAppState.lastHandshakeAt = probe.checkedAt;
+    motherAppState.lastHandshakeStatus = probe.httpStatus;
+    motherAppState.lastHandshakeOk = probe.ok;
+    motherAppState.verifiedPageTitle = probe.pageTitle || motherAppState.verifiedPageTitle;
+    motherAppState.handshakeError = probe.error;
+    motherAppState.updatedAt = probe.checkedAt;
+    saveMotherAppState(motherAppState);
+
+    try {
+      fs.mkdirSync(path.dirname(base44ConfigPath), { recursive: true });
+      writeJsonAtomic(base44ConfigPath, {
+        base44AppUrl: parts.cleanUrl,
+        motherOrigin: parts.origin,
+        storyId: parts.storyId,
+        role: 'mother_app',
+        updatedAt: probe.checkedAt
+      });
+    } catch {
+      // Non-fatal
+    }
+
+    const baseUrl = resolveBaseUrl(req);
+    res.json({
+      handshake: probe,
+      summary: await buildMotherAppSummaryPayload(baseUrl),
+      message: probe.ok
+        ? `Verified live connection to Mother App (${parts.origin} · HTTP ${probe.httpStatus}${probe.pageTitle ? ` · "${probe.pageTitle}"` : ''}).`
+        : probe.error || 'Could not verify Mother App HTTP handshake.'
+    });
+  });
+
+  app.post('/api/mother-app/record-revenue', async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as {
+      streamType?: MotherAppStreamType;
+      sourceLabel?: string;
+      clicks?: number;
+      watchMinutes?: number;
+      watchSeconds?: number;
+      amountUsd?: number;
+      note?: string;
+      withdrawNow?: boolean;
+      withdrawFullAvailable?: boolean;
+      methodId?: string;
+    };
+
+    const validStreams: MotherAppStreamType[] = [
+      'sponsored_story_slot',
+      'reader_traffic_yield',
+      'subscription_referral',
+      'reader_tip',
+      'live_checkout_settlement',
+      'webhook_event'
+    ];
+    const streamType: MotherAppStreamType =
+      typeof body.streamType === 'string' && validStreams.includes(body.streamType)
+        ? body.streamType
+        : 'sponsored_story_slot';
+
+    const baseUrl = resolveBaseUrl(req);
+    const result = await withPayoutLock(() =>
+      recordMotherAppSettlement({
+        baseOrigin: baseUrl,
+        streamType,
+        sourceLabel: body.sourceLabel,
+        clicks: typeof body.clicks === 'number' ? body.clicks : Number(body.clicks) || 0,
+        watchMinutes:
+          typeof body.watchMinutes === 'number' ? body.watchMinutes : Number(body.watchMinutes) || 0,
+        watchSeconds:
+          typeof body.watchSeconds === 'number' ? body.watchSeconds : Number(body.watchSeconds) || 0,
+        amountUsd: typeof body.amountUsd === 'number' ? body.amountUsd : Number(body.amountUsd) || 0,
+        note: body.note,
+        withdrawNow: Boolean(body.withdrawNow),
+        withdrawFullAvailable: Boolean(body.withdrawFullAvailable),
+        methodId: typeof body.methodId === 'string' ? body.methodId : undefined
+      })
+    );
+    res.status(result.statusCode).json(result.body);
+  });
+
+  app.post('/api/mother-app/webhook', async (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as {
+      storyId?: string;
+      eventType?: MotherAppStreamType;
+      clicks?: number;
+      watchSeconds?: number;
+      watchMinutes?: number;
+      grossUsd?: number;
+      txRef?: string;
+      sourceLabel?: string;
+      note?: string;
+    };
+
+    const baseUrl = resolveBaseUrl(req);
+    const result = await withPayoutLock(() =>
+      recordMotherAppSettlement({
+        baseOrigin: baseUrl,
+        streamType: body.eventType ?? 'webhook_event',
+        sourceLabel:
+          typeof body.sourceLabel === 'string' && body.sourceLabel.trim()
+            ? body.sourceLabel.trim()
+            : `Base44 Webhook · Story ${typeof body.storyId === 'string' && body.storyId.trim() ? body.storyId.trim().slice(0, 48) : motherAppState.storyId}`,
+        clicks: typeof body.clicks === 'number' ? body.clicks : Number(body.clicks) || 0,
+        watchSeconds:
+          typeof body.watchSeconds === 'number' ? body.watchSeconds : Number(body.watchSeconds) || 0,
+        watchMinutes:
+          typeof body.watchMinutes === 'number' ? body.watchMinutes : Number(body.watchMinutes) || 0,
+        amountUsd: typeof body.grossUsd === 'number' ? body.grossUsd : Number(body.grossUsd) || 0,
+        externalTxRef: typeof body.txRef === 'string' && body.txRef.trim() ? body.txRef.trim() : undefined,
+        note: body.note
+      })
+    );
+    res.status(result.statusCode).json(result.body);
+  });
+
+  app.post('/api/mother-app/withdraw', async (req: Request, res: Response) => {
+    const { methodId, amountUsd, note } = req.body ?? {};
+    const baseUrl = resolveBaseUrl(req);
+    const result = await withPayoutLock(async () => {
+      const wdRes = await executeUnifiedOwnerWithdrawal({
+        methodId: typeof methodId === 'string' ? methodId : undefined,
+        amountUsd: typeof amountUsd === 'number' ? amountUsd : undefined,
+        sourceScope: 'base44_app',
+        note:
+          typeof note === 'string' && note.trim()
+            ? note.trim().slice(0, 140)
+            : `Mother App Verified Revenue Withdrawal (${motherAppState.storyId})`,
+        viaRevenueHub: false
+      });
+      if (wdRes.statusCode >= 400) return wdRes;
+      const wdRecord = (wdRes.body.withdrawal as OwnerWithdrawalRecord) ?? null;
+      if (wdRecord) {
+        motherAppState.totalWithdrawnUsd = fromCents(
+          toCents(motherAppState.totalWithdrawnUsd) + toCents(wdRecord.amountUsd)
+        );
+        motherAppState.updatedAt = new Date().toISOString();
+        saveMotherAppState(motherAppState);
+      }
+      return {
+        statusCode: wdRes.statusCode,
+        body: {
+          ...wdRes.body,
+          summary: await buildMotherAppSummaryPayload(baseUrl)
+        }
+      };
+    });
+    res.status(result.statusCode).json(result.body);
   });
 
   // Vite dev middleware or production static assets

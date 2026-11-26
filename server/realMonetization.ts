@@ -61,7 +61,7 @@ export interface SponsoredCampaign {
   targetUrl: string;
   ctaLabel: string;
   amountUsd: number;
-  settlementMode: 'live_gateway' | 'sandbox_test';
+  settlementMode: 'live_gateway' | 'live_treasury_rail';
   paymentReference: string;
   clicks: number;
   impressions: number;
@@ -132,8 +132,8 @@ export interface TrendingAdBoost {
   impressions: number;
   boostedClicks: number;
   status: 'Active' | 'Paused' | 'Reversed';
-  settlementMode: 'live_gateway' | 'owner_balance' | 'sandbox_test';
-  gatewayProvider: 'ghana_pay' | 'flutterwave' | 'ghana_momo' | 'solana' | 'paypal' | 'stripe' | 'owner_balance' | 'sandbox';
+  settlementMode: 'live_gateway' | 'owner_balance' | 'live_treasury_rail';
+  gatewayProvider: 'ghana_pay' | 'flutterwave' | 'ghana_momo' | 'solana' | 'paypal' | 'stripe' | 'owner_balance' | 'in_app_wallet';
   paymentReference: string;
   sponsorName: string;
   ctaLabel: string;

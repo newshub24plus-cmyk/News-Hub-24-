@@ -547,10 +547,10 @@ export const VIDEO_REELS: VideoReelItem[] = [
     sponsorCtaLabel: 'Sponsor: Open Wire Cloud Infrastructure',
     sponsorUrlLabel: 'openwire.newshub24plus.com',
     linkedArticleId: 'nh24-001',
-    initialViews: 4280,
-    initialWatchSeconds: 74900,
-    initialClicks: 615,
-    initialEarnedUsd: 164.45
+    initialViews: 0,
+    initialWatchSeconds: 0,
+    initialClicks: 0,
+    initialEarnedUsd: 0
   },
   {
     id: 'reel-002',
@@ -564,10 +564,10 @@ export const VIDEO_REELS: VideoReelItem[] = [
     sponsorCtaLabel: 'Sponsor: Meridian 70mm Repertory Pass',
     sponsorUrlLabel: 'cinema.newshub24plus.com',
     linkedArticleId: 'nh24-013',
-    initialViews: 3890,
-    initialWatchSeconds: 61420,
-    initialClicks: 540,
-    initialEarnedUsd: 142.8
+    initialViews: 0,
+    initialWatchSeconds: 0,
+    initialClicks: 0,
+    initialEarnedUsd: 0
   },
   {
     id: 'reel-003',
@@ -581,10 +581,10 @@ export const VIDEO_REELS: VideoReelItem[] = [
     sponsorCtaLabel: 'Sponsor: Velocity Track Timing Systems',
     sponsorUrlLabel: 'sports.newshub24plus.com',
     linkedArticleId: 'nh24-010',
-    initialViews: 5120,
-    initialWatchSeconds: 86100,
-    initialClicks: 790,
-    initialEarnedUsd: 198.2
+    initialViews: 0,
+    initialWatchSeconds: 0,
+    initialClicks: 0,
+    initialEarnedUsd: 0
   },
   {
     id: 'reel-004',
@@ -598,10 +598,10 @@ export const VIDEO_REELS: VideoReelItem[] = [
     sponsorCtaLabel: 'Sponsor: Public Heritage Audio Grant',
     sponsorUrlLabel: 'archives.newshub24plus.com',
     linkedArticleId: 'nh24-012',
-    initialViews: 3640,
-    initialWatchSeconds: 71200,
-    initialClicks: 492,
-    initialEarnedUsd: 138.6
+    initialViews: 0,
+    initialWatchSeconds: 0,
+    initialClicks: 0,
+    initialEarnedUsd: 0
   },
   {
     id: 'reel-005',
@@ -615,10 +615,10 @@ export const VIDEO_REELS: VideoReelItem[] = [
     sponsorCtaLabel: 'Book Sponsored Commercial Spot ($0.45/Click)',
     sponsorUrlLabel: 'ads.newshub24plus.com',
     linkedArticleId: 'nh24-015',
-    initialViews: 2950,
-    initialWatchSeconds: 44250,
-    initialClicks: 840,
-    initialEarnedUsd: 215.9
+    initialViews: 0,
+    initialWatchSeconds: 0,
+    initialClicks: 0,
+    initialEarnedUsd: 0
   },
   {
     id: 'reel-006',
@@ -632,10 +632,10 @@ export const VIDEO_REELS: VideoReelItem[] = [
     sponsorCtaLabel: 'Sponsor: Fair-Value Stage Pass',
     sponsorUrlLabel: 'stage.newshub24plus.com',
     linkedArticleId: 'nh24-011',
-    initialViews: 3180,
-    initialWatchSeconds: 51900,
-    initialClicks: 465,
-    initialEarnedUsd: 129.35
+    initialViews: 0,
+    initialWatchSeconds: 0,
+    initialClicks: 0,
+    initialEarnedUsd: 0
   }
 ];
 

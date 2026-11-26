@@ -9,7 +9,6 @@ import {
   Download,
   ExternalLink,
   FileCode2,
-  Link2,
   Lock,
   Menu,
   Moon,
@@ -26,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { AiNewsroomModal } from './components/AiNewsroomModal';
+import { AirtimeBundleRevenueSection } from './components/AirtimeBundleRevenueSection';
 import { ApkInspectionModal } from './components/ApkInspectionModal';
 import { ArticleModal } from './components/ArticleModal';
 import { AuthorProfileDrawer, type SelectedAuthorTarget } from './components/AuthorProfileDrawer';
@@ -45,6 +45,7 @@ import {
 import { EditorialImage } from './components/EditorialImage';
 import { GlobalFinancialPlatformSection } from './components/GlobalFinancialPlatformSection';
 import { MonetizationSection, type MonetizationStateResponse, type PayoutConfig } from './components/MonetizationSection';
+import { MotherAppHubSection } from './components/MotherAppHubSection';
 import {
   PaymentModal,
   type MonetizationPlan,
@@ -77,6 +78,7 @@ import {
 import { SecurityShieldSection } from './components/SecurityShieldSection';
 import { SeoInspectorModal } from './components/SeoInspectorModal';
 import { DEFAULT_GLOBAL_SEO_SETTINGS, SeoSettingsModal } from './components/SeoSettingsModal';
+import { TreasuryIntegrityYieldSection } from './components/TreasuryIntegrityYieldSection';
 import { UploadVideoModal } from './components/UploadVideoModal';
 import {
   VideoReelsHubSection,
@@ -84,6 +86,8 @@ import {
   type RevenueEngineResponse,
   type RevenueEventItem
 } from './components/VideoReelsHubSection';
+import { WorkspaceHubSection } from './components/WorkspaceHubSection';
+import { calculateEstimatedReadTime } from './utils/readingTime';
 import {
   auth,
   isAgencyAdminUser,
@@ -101,6 +105,7 @@ import {
   APK_RELEASE_HISTORY,
   ARTICLE_CATALOGS,
   NEWS_ARTICLES,
+  VIDEO_REELS,
   type NewsArticle,
   type NewsCategory,
   type VideoReelItem
@@ -246,11 +251,11 @@ export default function App() {
   const [searchSubmitResult, setSearchSubmitResult] = useState<SearchSubmitResponse | null>(null);
   const [searchSubmitError, setSearchSubmitError] = useState<string | null>(null);
 
-  // Base44 Official App Link state
+  // Base44 Official Mother App Link state
   const [base44Link, setBase44Link] = useState<Base44LinkResponse>({
     officialWebsiteUrl: typeof window !== 'undefined' ? window.location.origin : '',
-    base44AppUrl: 'https://base44.com',
-    isCustomAppUrl: false,
+    base44AppUrl: 'https://aloof-daily-news-pulse.base44.app/story/6b04f190aa908b27ce284a57',
+    isCustomAppUrl: true,
     integrationEndpoints: {
       articlesFeed: '/api/articles',
       rssFeed: '/rss.xml',
@@ -258,10 +263,6 @@ export default function App() {
       pressDeskApi: '/api/press-inquiry'
     }
   });
-  const [base44InputUrl, setBase44InputUrl] = useState<string>('');
-  const [base44Saving, setBase44Saving] = useState<boolean>(false);
-  const [base44Feedback, setBase44Feedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [copiedEndpoint, setCopiedEndpoint] = useState<string | null>(null);
 
   // Press inquiry form state
   const [formName, setFormName] = useState('');
@@ -355,6 +356,17 @@ export default function App() {
       .then((res) => (res.ok ? res.json() : null))
       .then((data: RewardsSummaryResponse | null) => {
         if (data) setRewardsData(data);
+      })
+      .catch(() => {
+        // Ignore non-fatal fetch error
+      });
+  }, []);
+
+  const refreshNotifications = useCallback(() => {
+    fetch('/api/notifications')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: NotificationsStateResponse | null) => {
+        if (data) setNotificationsState(data);
       })
       .catch(() => {
         // Ignore non-fatal fetch error
@@ -737,7 +749,6 @@ export default function App() {
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Failed to load Base44 link'))))
       .then((data: Base44LinkResponse) => {
         setBase44Link(data);
-        setBase44InputUrl(data.isCustomAppUrl ? data.base44AppUrl : '');
       })
       .catch(() => {
         // Keep fallback
@@ -1028,31 +1039,36 @@ export default function App() {
           setPlatformThresholds(payload.platformThresholds);
         }
         refreshOwnerPayouts();
+        refreshNotifications();
         setTrendsRefreshKey((k) => k + 1);
         return payload.event;
       } catch {
         return null;
       }
     },
-    [refreshOwnerPayouts, attributedPlatform]
+    [refreshOwnerPayouts, refreshNotifications, attributedPlatform]
   );
 
-  const handleReadingEngage = useCallback((articleId: string, seconds: number) => {
-    fetch('/api/rewards/accrue', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'article_read', articleId, seconds })
-    })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((payload: { rewards?: RewardsSummaryResponse } | null) => {
-        if (payload?.rewards) {
-          setRewardsData(payload.rewards);
-        }
+  const handleReadingEngage = useCallback(
+    (articleId: string, seconds: number) => {
+      fetch('/api/rewards/accrue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'article_read', articleId, seconds })
       })
-      .catch(() => {
-        // Non-fatal background accrual
-      });
-  }, []);
+        .then((res) => (res.ok ? res.json() : null))
+        .then((payload: { rewards?: RewardsSummaryResponse } | null) => {
+          if (payload?.rewards) {
+            setRewardsData(payload.rewards);
+          }
+          refreshNotifications();
+        })
+        .catch(() => {
+          // Non-fatal background accrual
+        });
+    },
+    [refreshNotifications]
+  );
 
   const openArticle = (article: NewsArticle) => {
     const optimisticArticle = { ...article, views: article.views + 1 };
@@ -1431,59 +1447,6 @@ export default function App() {
     void recordRevenueClick('app_apk', 'android_apk', 'apk-download', apkInfo.filename);
   };
 
-  const handleSaveBase44Link = async (e: FormEvent) => {
-    e.preventDefault();
-    setBase44Feedback(null);
-    const trimmed = base44InputUrl.trim();
-    if (!trimmed) {
-      setBase44Feedback({
-        type: 'error',
-        text: 'Enter your published Base44 app URL (e.g. https://news-hub-24-plus.base44.app).'
-      });
-      return;
-    }
-
-    setBase44Saving(true);
-    try {
-      const res = await fetch('/api/base44-link', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ base44AppUrl: trimmed })
-      });
-      const payload = await res.json();
-      if (!res.ok) {
-        throw new Error(payload.error || 'Could not update Base44 link.');
-      }
-      setBase44Link((prev) => ({
-        ...prev,
-        officialWebsiteUrl: payload.officialWebsiteUrl,
-        base44AppUrl: payload.base44AppUrl,
-        isCustomAppUrl: payload.isCustomAppUrl
-      }));
-      setBase44Feedback({
-        type: 'success',
-        text: payload.message
-      });
-    } catch (err: unknown) {
-      setBase44Feedback({
-        type: 'error',
-        text: err instanceof Error ? err.message : 'Unable to save Base44 app URL.'
-      });
-    } finally {
-      setBase44Saving(false);
-    }
-  };
-
-  const handleCopyEndpoint = async (key: string, value: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopiedEndpoint(key);
-      window.setTimeout(() => setCopiedEndpoint(null), 2000);
-    } catch {
-      setCopiedEndpoint(null);
-    }
-  };
-
   const handleSubmitToSearchEngines = async () => {
     setSubmittingSearchEngines(true);
     setSearchSubmitError(null);
@@ -1599,7 +1562,7 @@ export default function App() {
           {/* Zone 2: Single-line navigation links */}
           <nav
             aria-label="Primary Navigation"
-            className="hidden lg:flex items-center gap-4 text-sm font-medium text-[#44403C] dark:text-[#D6D3CD]"
+            className="hidden lg:flex items-center gap-3 xl:gap-4 text-[13px] xl:text-sm font-medium text-[#44403C] dark:text-[#D6D3CD]"
           >
             <a
               href="#top-stories"
@@ -1638,10 +1601,22 @@ export default function App() {
               Remit &amp; *789#
             </a>
             <a
-              href="#community"
+              href="#airtime-revenue"
               className="hover:text-[#141413] dark:hover:text-[#F5F3EE] hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
             >
+              Airtime Revenue
+            </a>
+            <a
+              href="#community"
+              className="hidden xl:inline-block hover:text-[#141413] dark:hover:text-[#F5F3EE] hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
+            >
               Community
+            </a>
+            <a
+              href="#workspace-hub"
+              className="hidden xl:inline-block hover:text-[#141413] dark:hover:text-[#F5F3EE] hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0"
+            >
+              Gmail &amp; Slides
             </a>
           </nav>
 
@@ -1746,8 +1721,17 @@ export default function App() {
             <a href="#global-transfers" onClick={() => setMobileMenuOpen(false)} className="py-1.5">
               Global Remit, Airtime &amp; *789#
             </a>
+            <a href="#airtime-revenue" onClick={() => setMobileMenuOpen(false)} className="py-1.5">
+              Airtime Bundle Revenue Converter
+            </a>
+            <a href="#mother-app" onClick={() => setMobileMenuOpen(false)} className="py-1.5">
+              Base44 Mother App &amp; Revenue
+            </a>
             <a href="#community" onClick={() => setMobileMenuOpen(false)} className="py-1.5">
               Community, Reactions &amp; Deploy
+            </a>
+            <a href="#workspace-hub" onClick={() => setMobileMenuOpen(false)} className="py-1.5">
+              Gmail, Google Slides &amp; Keep Notes
             </a>
             <button
               type="button"
@@ -1798,10 +1782,10 @@ export default function App() {
               href={base44Link.base44AppUrl}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={() => void recordRevenueClick('app_apk', 'base44_app', 'base44-masthead', 'Base44 App Portal Launch')}
+              onClick={() => void recordRevenueClick('app_apk', 'base44_app', 'base44-masthead', 'Mother App Story Launch')}
               className="inline-flex items-center gap-1 font-medium text-[#141413] dark:text-[#F5F3EE] hover:text-[#991B1B] dark:hover:text-[#F87171] hover:underline underline-offset-4"
             >
-              <span>Base44 App Portal</span>
+              <span>Mother App (Base44)</span>
               <ExternalLink className="w-3 h-3" />
             </a>
             <span aria-hidden="true">·</span>
@@ -1865,7 +1849,7 @@ export default function App() {
                   <span aria-hidden="true">·</span>
                   <span>{leadArticle.category}</span>
                   <span aria-hidden="true">·</span>
-                  <span className="font-mono tabular-nums">{leadArticle.readTime}</span>
+                  <span className="font-mono tabular-nums">{calculateEstimatedReadTime(leadArticle).summary}</span>
                   <span aria-hidden="true">·</span>
                   <span className="font-mono tabular-nums">{leadArticle.views.toLocaleString()} views</span>
                 </div>
@@ -1958,7 +1942,7 @@ export default function App() {
                         <span aria-hidden="true">·</span>
                         <span>{story.bureau}</span>
                         <span aria-hidden="true">·</span>
-                        <span className="font-mono tabular-nums">{story.readTime}</span>
+                        <span className="font-mono tabular-nums">{calculateEstimatedReadTime(story).shortLabel}</span>
                       </div>
                       <h3 className="font-serif text-xl font-semibold text-[#141413] dark:text-[#F5F3EE] leading-snug mb-2">
                         <button
@@ -2198,7 +2182,7 @@ export default function App() {
                         <span aria-hidden="true">·</span>
                         <span>{article.bureau}</span>
                         <span aria-hidden="true">·</span>
-                        <span className="font-mono tabular-nums">{article.readTime}</span>
+                        <span className="font-mono tabular-nums">{calculateEstimatedReadTime(article).summary}</span>
                         <span aria-hidden="true">·</span>
                         <span className="font-mono tabular-nums">{article.views.toLocaleString()} views</span>
                       </div>
@@ -2378,7 +2362,7 @@ export default function App() {
                         <span aria-hidden="true">·</span>
                         <span>{item.bureau}</span>
                         <span aria-hidden="true">·</span>
-                        <span className="font-mono tabular-nums">{item.readTime}</span>
+                        <span className="font-mono tabular-nums">{calculateEstimatedReadTime(item).shortLabel}</span>
                         <span aria-hidden="true">·</span>
                         <span className="font-mono tabular-nums">{item.views.toLocaleString()} views</span>
                       </div>
@@ -2540,28 +2524,32 @@ export default function App() {
           onOpenPublishModal={() => setPublishModalOpen(true)}
         />
 
-        {/* SECTION 3D: REWARDS CONVERTER & OWNER WITHDRAWAL METHODS */}
-        <OwnerWithdrawalSection
-          data={ownerPayouts}
-          rewardsData={rewardsData}
-          onUpdated={({
+        {/* SECTION 3C-IV: AIRTIME BUNDLE-TO-VERIFIED-REVENUE CONVERTER & INSTANT WITHDRAWAL */}
+        <AirtimeBundleRevenueSection
+          articles={articles}
+          reels={revenueEngine?.reels ?? VIDEO_REELS}
+          withdrawalMethods={ownerPayouts?.methods ?? []}
+          availableBalanceUsd={
+            ownerPayouts?.balances.availableUsd ?? monetization?.summary.pendingCreatorPayoutUsd ?? 0
+          }
+          onRevenueConverted={({
             ownerPayouts: nextOwnerPayouts,
             rewards: nextRewards,
-            payoutConfig,
             revenueEngine: nextRev,
             availableUsd
           }) => {
-            setOwnerPayouts(nextOwnerPayouts);
+            if (nextOwnerPayouts) {
+              setOwnerPayouts(nextOwnerPayouts as OwnerPayoutsResponse);
+            } else {
+              refreshOwnerPayouts();
+            }
             if (nextRewards) {
-              setRewardsData(nextRewards);
+              setRewardsData(nextRewards as RewardsSummaryResponse);
             } else {
               refreshRewardsSummary();
             }
-            if (payoutConfig) {
-              handlePayoutUpdated(payoutConfig);
-            }
             if (nextRev) {
-              setRevenueEngine(nextRev);
+              setRevenueEngine(nextRev as RevenueEngineResponse);
             }
             if (typeof availableUsd === 'number') {
               setMonetization((prev) =>
@@ -2584,7 +2572,147 @@ export default function App() {
               .catch(() => {
                 // Ignore non-fatal sync
               });
+            refreshNotifications();
+            setTrendsRefreshKey((k) => k + 1);
           }}
+        />
+
+        {/* SECTION 3D: REWARDS CONVERTER & OWNER WITHDRAWAL METHODS */}
+        <OwnerWithdrawalSection
+          data={ownerPayouts}
+          rewardsData={rewardsData}
+          platformUncollectedUsd={platformThresholds?.totals.totalUncollectedAllPlatformsUsd ?? 0}
+          platformTotalClicks={platformThresholds?.totals.totalClicks ?? 0}
+          platformTotalWatchHours={platformThresholds?.totals.totalWatchHours ?? 0}
+          onUpdated={({
+            ownerPayouts: nextOwnerPayouts,
+            rewards: nextRewards,
+            payoutConfig,
+            revenueEngine: nextRev,
+            platformThresholds: nextPlatformThresholds,
+            availableUsd
+          }) => {
+            setOwnerPayouts(nextOwnerPayouts);
+            if (nextRewards) {
+              setRewardsData(nextRewards);
+            } else {
+              refreshRewardsSummary();
+            }
+            if (payoutConfig) {
+              handlePayoutUpdated(payoutConfig);
+            }
+            if (nextRev) {
+              setRevenueEngine(nextRev);
+            }
+            if (nextPlatformThresholds) {
+              setPlatformThresholds(nextPlatformThresholds as PlatformThresholdsResponse);
+            }
+            if (typeof availableUsd === 'number') {
+              setMonetization((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      summary: {
+                        ...prev.summary,
+                        pendingCreatorPayoutUsd: availableUsd
+                      }
+                    }
+                  : prev
+              );
+            }
+            fetch('/api/monetization')
+              .then((res) => (res.ok ? res.json() : null))
+              .then((freshMon: MonetizationStateResponse | null) => {
+                if (freshMon) setMonetization(freshMon);
+              })
+              .catch(() => {
+                // Ignore non-fatal sync
+              });
+            setTrendsRefreshKey((k) => k + 1);
+          }}
+        />
+
+        {/* SECTION 3D-II: LIVE TREASURY OPERATIONAL INTEGRITY, DOUBLE-ENTRY LEDGER & CAPITAL YIELD */}
+        <TreasuryIntegrityYieldSection
+          externalRefreshKey={trendsRefreshKey}
+          onTreasuryMutated={() => {
+            refreshOwnerPayouts();
+            refreshRewardsSummary();
+            fetch('/api/monetization')
+              .then((res) => (res.ok ? res.json() : null))
+              .then((freshMon: MonetizationStateResponse | null) => {
+                if (freshMon) setMonetization(freshMon);
+              })
+              .catch(() => {
+                // Ignore non-fatal sync
+              });
+            setTrendsRefreshKey((k) => k + 1);
+          }}
+        />
+
+        {/* SECTION 3E: BASE44 MOTHER APP CONNECTION & VERIFIED REVENUE BRIDGE */}
+        <MotherAppHubSection
+          withdrawalMethods={ownerPayouts?.methods ?? []}
+          onMotherAppUpdated={({
+            base44AppUrl: nextUrl,
+            ownerPayouts: nextOwnerPayouts,
+            rewards: nextRewards,
+            revenueEngine: nextRev,
+            platformThresholds: nextPlatformThresholds
+          }) => {
+            if (nextUrl) {
+              setBase44Link((prev) => ({
+                ...prev,
+                base44AppUrl: nextUrl,
+                isCustomAppUrl: true
+              }));
+            }
+            if (nextOwnerPayouts) {
+              setOwnerPayouts(nextOwnerPayouts as OwnerPayoutsResponse);
+            } else {
+              refreshOwnerPayouts();
+            }
+            if (nextRewards) {
+              setRewardsData(nextRewards as RewardsSummaryResponse);
+            } else {
+              refreshRewardsSummary();
+            }
+            if (nextRev) {
+              setRevenueEngine(nextRev as RevenueEngineResponse);
+            }
+            if (nextPlatformThresholds) {
+              setPlatformThresholds(nextPlatformThresholds as PlatformThresholdsResponse);
+            }
+            fetch('/api/monetization')
+              .then((res) => (res.ok ? res.json() : null))
+              .then((freshMon: MonetizationStateResponse | null) => {
+                if (freshMon) setMonetization(freshMon);
+              })
+              .catch(() => {
+                // Ignore non-fatal sync
+              });
+            refreshNotifications();
+            refreshDeployStatus();
+            setTrendsRefreshKey((k) => k + 1);
+          }}
+          onInspectEndpoint={setInspectorTarget}
+          onLaunchRealCheckout={(planId) => {
+            const targetPlan =
+              monetization?.plans.find((p) => p.id === planId) ??
+              monetization?.plans.find((p) => p.id === 'commercials-slot') ??
+              monetization?.plans[0];
+            if (targetPlan) {
+              setCheckoutTarget({ plan: targetPlan, cycle: 'monthly' });
+            }
+          }}
+        />
+
+        {/* SECTION 3F: GOOGLE WORKSPACE (GMAIL, SLIDES BRIEFINGS & KEEP NOTES) */}
+        <WorkspaceHubSection
+          articles={articles}
+          availableUsd={ownerPayouts?.balances.availableUsd ?? monetization?.summary.pendingCreatorPayoutUsd ?? 0}
+          totalWatchHours={rewardsData?.totals.totalWatchHoursTracked ?? 0}
+          totalClicks={rewardsData?.totals.totalClicksTracked ?? 0}
         />
 
         {/* SECTION 4: VISIBLE ANDROID APK DOWNLOAD & VERIFICATION */}
@@ -2784,128 +2912,6 @@ export default function App() {
               }}
               onInspectEndpoint={setInspectorTarget}
             />
-
-            {/* Official Website & Base44 App Integration Bridge */}
-            <div id="base44-portal" className="p-6 sm:p-8 bg-white dark:bg-[#171715] border border-[#DFDBD2] dark:border-[#2E2C28] rounded-lg">
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-                <div className="lg:col-span-6 space-y-4">
-                  <div className="flex items-center gap-2 text-xs font-semibold text-[#991B1B] dark:text-[#F87171]">
-                    <Link2 className="w-4 h-4" />
-                    <span>Official Website · Base44 Application Link</span>
-                  </div>
-                  <h3 className="font-serif text-2xl sm:text-3xl font-bold text-[#141413] dark:text-[#F5F3EE]">
-                    Connected to the News Hub 24+ Base44 App
-                  </h3>
-                  <p className="text-sm text-[#44403C] dark:text-[#D6D3CD] leading-relaxed">
-                    This domain serves as the official public website, press wire hub, and Android APK distribution portal for the News Hub 24+ application on Base44. CORS-enabled REST and RSS feeds allow your Base44 app to sync breaking stories directly.
-                  </p>
-
-                  <div className="pt-2 flex flex-wrap items-center gap-3">
-                    <a
-                      href={base44Link.base44AppUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={() => void recordRevenueClick('app_apk', 'base44_app', 'base44-portal-cta', 'Open Base44 App')}
-                      className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-semibold text-white bg-[#991B1B] hover:bg-[#7F1D1D] dark:bg-[#DC2626] dark:hover:bg-[#B91C1C] rounded-md transition-colors whitespace-nowrap"
-                    >
-                      <span>Open News Hub 24+ Base44 App</span>
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                    <button
-                      type="button"
-                      onClick={() => setInspectorTarget({ path: '/api/articles', label: 'Base44 Live JSON Wire Feed (/api/articles)' })}
-                      className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-[#141413] dark:text-[#F5F3EE] bg-[#F5F2EB] dark:bg-[#242320] border border-[#D6D1C7] dark:border-[#3A3732] rounded-md hover:bg-[#EAE5DC] dark:hover:bg-[#2E2C28] transition-colors whitespace-nowrap"
-                    >
-                      <span>Inspect Base44 JSON Feed</span>
-                    </button>
-                  </div>
-
-                  <form onSubmit={handleSaveBase44Link} className="pt-4 border-t border-[#E5E2DC] dark:border-[#2C2A26] space-y-2.5">
-                    <label htmlFor="base44-url-input" className="block text-xs font-semibold text-[#141413] dark:text-[#F5F3EE]">
-                      Linked Base44 App URL ({base44Link.isCustomAppUrl ? 'Custom App Connected' : 'Default base44.com'})
-                    </label>
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <input
-                        id="base44-url-input"
-                        type="url"
-                        value={base44InputUrl}
-                        onChange={(e) => setBase44InputUrl(e.target.value)}
-                        placeholder="https://your-news-hub-24.base44.app"
-                        className="flex-1 px-3 py-2 text-xs font-mono bg-[#FBF9F5] dark:bg-[#10100F] border border-[#D6D1C7] dark:border-[#3A3732] rounded-md text-[#141413] dark:text-[#F5F3EE] placeholder:text-[#78716C] focus:outline-none focus:border-[#141413] dark:focus:border-[#F5F3EE]"
-                      />
-                      <button
-                        type="submit"
-                        disabled={base44Saving}
-                        className="px-4 py-2 text-xs font-semibold text-white bg-[#141413] dark:bg-[#F5F3EE] dark:text-[#141413] rounded-md hover:bg-[#292524] dark:hover:bg-[#E5E2DC] disabled:opacity-60 transition-colors whitespace-nowrap shrink-0"
-                      >
-                        {base44Saving ? 'Linking…' : 'Link Base44 URL'}
-                      </button>
-                    </div>
-                    {base44Feedback && (
-                      <p
-                        role="status"
-                        className={`text-xs font-medium ${
-                          base44Feedback.type === 'success'
-                            ? 'text-[#14532D] dark:text-[#4ADE80]'
-                            : 'text-[#991B1B] dark:text-[#FCA5A5]'
-                        }`}
-                      >
-                        {base44Feedback.text}
-                      </p>
-                    )}
-                  </form>
-                </div>
-
-                <div className="lg:col-span-6 bg-[#FBF9F5] dark:bg-[#10100F] border border-[#E5E2DC] dark:border-[#2C2A26] rounded-md overflow-hidden">
-                  <div className="px-4 py-3 bg-[#F5F2EB] dark:bg-[#1C1B19] border-b border-[#E5E2DC] dark:border-[#2C2A26] text-xs font-semibold text-[#141413] dark:text-[#F5F3EE]">
-                    Official Website Links for Your Base44 App
-                  </div>
-                  <div className="divide-y divide-[#E5E2DC] dark:divide-[#2C2A26]">
-                    {[
-                      {
-                        key: 'official-site',
-                        label: 'Official Website URL',
-                        value: base44Link.officialWebsiteUrl || window.location.origin
-                      },
-                      {
-                        key: 'articles-api',
-                        label: 'JSON Articles Sync API (CORS Enabled)',
-                        value: base44Link.integrationEndpoints.articlesFeed
-                      },
-                      {
-                        key: 'rss-feed',
-                        label: 'RSS 2.0 Breaking Wire Feed',
-                        value: base44Link.integrationEndpoints.rssFeed
-                      },
-                      {
-                        key: 'apk-url',
-                        label: 'Direct Android APK Download URL',
-                        value: base44Link.integrationEndpoints.apkDownload
-                      }
-                    ].map((item) => (
-                      <div key={item.key} className="px-4 py-3 flex items-center justify-between gap-3 text-xs">
-                        <div className="min-w-0">
-                          <span className="font-semibold text-[#141413] dark:text-[#F5F3EE] block">{item.label}</span>
-                          <span className="font-mono text-[#57534E] dark:text-[#A8A29E] block truncate">{item.value}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleCopyEndpoint(item.key, item.value)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-[#141413] dark:text-[#F5F3EE] bg-white dark:bg-[#242320] border border-[#D6D1C7] dark:border-[#3A3732] rounded-md hover:border-[#141413] dark:hover:border-[#F5F3EE] transition-colors whitespace-nowrap shrink-0"
-                        >
-                          {copiedEndpoint === item.key ? (
-                            <Check className="w-3.5 h-3.5 text-[#14532D] dark:text-[#4ADE80]" />
-                          ) : (
-                            <Copy className="w-3.5 h-3.5" />
-                          )}
-                          <span>{copiedEndpoint === item.key ? 'Copied' : 'Copy'}</span>
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
 
             {/* Search Engine Hosting & Crawler Endpoints + Press Contact Form */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 pt-8 border-t border-[#E5E2DC] dark:border-[#2C2A26]">
@@ -3295,10 +3301,10 @@ export default function App() {
                 <li><a href="#security-defense" className="hover:text-[#141413] dark:hover:text-[#F5F3EE]">Security &amp; App Virus Protection</a></li>
                 <li><a href="#official-domain" className="hover:text-[#141413] dark:hover:text-[#F5F3EE]">Official .com Domain ({domainConfig?.config.primaryDomain ?? 'newshub24plus.com'})</a></li>
                 <li><a href="#investigations" className="hover:text-[#141413] dark:hover:text-[#F5F3EE]">Investigations</a></li>
-                <li><a href="#base44-portal" className="hover:text-[#141413] dark:hover:text-[#F5F3EE]">Base44 Official App Link</a></li>
+                <li><a href="#mother-app" className="hover:text-[#141413] dark:hover:text-[#F5F3EE]">Mother App &amp; Base44 Revenue</a></li>
                 <li>
                   <a href={base44Link.base44AppUrl} target="_blank" rel="noopener noreferrer" className="font-medium text-[#141413] dark:text-[#F5F3EE] hover:underline">
-                    Launch on Base44.com →
+                    Open Base44 Mother App →
                   </a>
                 </li>
               </ul>

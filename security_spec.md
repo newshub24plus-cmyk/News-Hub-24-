@@ -20,6 +20,13 @@
    - Strictly owner- and admin-isolated (`existing().ownerUid == request.auth.uid || isAdmin()`).
    - Creation enforces `incoming().ownerUid == request.auth.uid`, valid enum `type`, bounded string lengths, `createdAt == request.time`, and `updatedAt == request.time`.
    - Updates are restricted to marking `read` status with `updatedAt == request.time` and immutable financial/type fields (`id`, `ownerUid`, `type`, `actualAmountUsd`, `createdAt`).
+9. **Airtime Bundle Conversions (`airtime_bundle_conversions/{conversionId}`)**:
+   - Strictly owner- and admin-isolated (`existing().ownerUid == request.auth.uid || isAdmin()`). List queries evaluate `existing().ownerUid == request.auth.uid || isBootstrapAdmin()` directly without relational `get()`/`exists()` reads.
+   - Creation requires `isVerifiedSignedIn()`, valid path ID, `incoming().ownerUid == request.auth.uid`, `creatorNetUsd >= 0.01`, bounded string/numeric fields, and `createdAt == request.time`.
+   - Financial audit records are strictly immutable (`allow update: if false; allow delete: if false;`).
+10. **Mother App Connections (`mother_app_connections/{connectionId}`) & Mother App Revenue Events (`mother_app_revenue_events/{eventId}`)**:
+   - `mother_app_connections`: Admin-managed Base44 Mother App link (`isAdmin()` required for create/update; owner or admin reads; `list` disabled).
+   - `mother_app_revenue_events`: Owner-isolated immutable monetization audit records (`existing().ownerUid == request.auth.uid || isAdmin()`, `list` avoids relational reads, `allow update: if false; allow delete: if false;`).
 
 ---
 
