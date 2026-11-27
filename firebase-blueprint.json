@@ -1084,6 +1084,150 @@
         "note",
         "createdAt"
       ]
+    },
+    "VerifiableLedgerRecord": {
+      "title": "VerifiableLedgerRecord",
+      "description": "Immutable SHA-256 hash-chained verifiable ledger database record (zero sandbox entries).",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "seq": { "type": "number" },
+        "recordType": {
+          "type": "string",
+          "enum": [
+            "GENESIS_VERIFIED_OPENING",
+            "REVENUE_CREDIT",
+            "CREATOR_EARNINGS_CLAIM",
+            "AIRTIME_CONVERSION",
+            "MOMO_WITHDRAWAL",
+            "PAYOUT_WITHDRAWAL",
+            "WITHDRAWAL_REVERSAL",
+            "LEDGER_RECONCILIATION"
+          ]
+        },
+        "rail": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "networkCode": { "type": "string", "minLength": 2, "maxLength": 32 },
+        "accountMasked": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "amountUsd": { "type": "number" },
+        "deltaUsd": { "type": "number" },
+        "amountLocal": { "type": "number" },
+        "currencyLocal": { "type": "string", "minLength": 3, "maxLength": 8 },
+        "balanceBeforeUsd": { "type": "number" },
+        "balanceAfterUsd": { "type": "number" },
+        "referenceId": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "settlementMode": {
+          "type": "string",
+          "enum": ["live_configured", "live_treasury_ledger"]
+        },
+        "note": { "type": "string", "minLength": 2, "maxLength": 240 },
+        "prevHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "recordHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "seq",
+        "recordType",
+        "rail",
+        "networkCode",
+        "accountMasked",
+        "amountUsd",
+        "deltaUsd",
+        "balanceBeforeUsd",
+        "balanceAfterUsd",
+        "referenceId",
+        "settlementMode",
+        "note",
+        "prevHash",
+        "recordHash",
+        "createdAt"
+      ]
+    },
+    "MomoWithdrawalOrder": {
+      "title": "MomoWithdrawalOrder",
+      "description": "Owner-isolated Express MTN MoMo / Mobile Money withdrawal order linked to its SHA-256 ledger digest.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "destinationLabel": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "maskedAccount": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "networkCode": { "type": "string", "minLength": 2, "maxLength": 32 },
+        "currency": { "type": "string", "minLength": 3, "maxLength": 8 },
+        "amountUsd": { "type": "number" },
+        "feeUsd": { "type": "number" },
+        "netSettledUsd": { "type": "number" },
+        "amountGhs": { "type": "number" },
+        "settlementMode": {
+          "type": "string",
+          "enum": ["live_configured", "live_treasury_ledger"]
+        },
+        "settlementReference": { "type": "string", "minLength": 2, "maxLength": 128 },
+        "status": {
+          "type": "string",
+          "enum": ["Disbursed", "Processing (1-2 Business Days)", "Reversed"]
+        },
+        "verifiableRecordHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "note": { "type": "string", "minLength": 2, "maxLength": 240 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "destinationLabel",
+        "maskedAccount",
+        "networkCode",
+        "currency",
+        "amountUsd",
+        "feeUsd",
+        "netSettledUsd",
+        "amountGhs",
+        "settlementMode",
+        "settlementReference",
+        "status",
+        "verifiableRecordHash",
+        "note",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -1150,6 +1294,14 @@
     "/mother_app_revenue_events/{eventId}": {
       "schema": { "$ref": "#/entities/MotherAppRevenueEvent" },
       "description": "Owner-isolated immutable verified monetization settlements attributed to the Base44 Mother App."
+    },
+    "/verifiable_ledger_records/{recordId}": {
+      "schema": { "$ref": "#/entities/VerifiableLedgerRecord" },
+      "description": "Owner-isolated immutable SHA-256 hash-chained verifiable database records."
+    },
+    "/momo_withdrawal_orders/{withdrawalId}": {
+      "schema": { "$ref": "#/entities/MomoWithdrawalOrder" },
+      "description": "Owner-isolated MTN MoMo and Mobile Money withdrawal receipts linked to SHA-256 hashes."
     }
   }
 }

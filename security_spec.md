@@ -27,6 +27,14 @@
 10. **Mother App Connections (`mother_app_connections/{connectionId}`) & Mother App Revenue Events (`mother_app_revenue_events/{eventId}`)**:
    - `mother_app_connections`: Admin-managed Base44 Mother App link (`isAdmin()` required for create/update; owner or admin reads; `list` disabled).
    - `mother_app_revenue_events`: Owner-isolated immutable monetization audit records (`existing().ownerUid == request.auth.uid || isAdmin()`, `list` avoids relational reads, `allow update: if false; allow delete: if false;`).
+11. **Verifiable SHA-256 Ledger Records (`verifiable_ledger_records/{recordId}`)**:
+   - Strictly owner- and admin-isolated (`existing().ownerUid == request.auth.uid || isAdmin()`, `list` evaluates ownership/bootstrap admin without relational `get()`/`exists()` reads).
+   - Enforces valid 64-char hex SHA-256 `prevHash` and `recordHash`, live production `settlementMode` (`live_configured` or `live_treasury_ledger`), `seq >= 1`, non-negative balances, and `createdAt == request.time`.
+   - Strictly append-only and immutable (`allow update: if false; allow delete: if false;`).
+12. **MTN MoMo Withdrawal Orders (`momo_withdrawal_orders/{withdrawalId}`)**:
+   - Strictly owner- and admin-isolated (`existing().ownerUid == request.auth.uid || isAdmin()`).
+   - Creation enforces `isVerifiedSignedIn()`, valid SHA-256 `verifiableRecordHash`, positive `amountUsd`/`netSettledUsd`, `createdAt == request.time`, and `updatedAt == request.time`.
+   - **Terminal State Locking**: Only verified admins may update `status` from non-reversed to `'Reversed'` (`affectedKeys().hasOnly(['status', 'updatedAt'])`); deletions are permanently denied (`allow delete: if false;`).
 
 ---
 

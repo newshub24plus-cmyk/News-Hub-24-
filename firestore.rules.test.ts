@@ -164,4 +164,28 @@ export const DIRTY_DOZEN_PAYLOADS: DirtyDozenCase[] = [
     payload: { creatorNetUsd: 999999 },
     expectedResult: 'PERMISSION_DENIED',
   },
+  {
+    id: 18,
+    name: 'SHA-256 Verifiable Ledger Record Tampering & Sandbox Mode Rejection',
+    operation: 'create',
+    path: 'verifiable_ledger_records/vdb-00002-evil',
+    auth: { uid: 'user_a', email: 'a@example.com', email_verified: true },
+    payload: {
+      id: 'vdb-00002-evil',
+      ownerUid: 'user_a',
+      settlementMode: 'sandbox',
+      prevHash: 'invalid-hash',
+      recordHash: 'invalid-hash',
+    },
+    expectedResult: 'PERMISSION_DENIED',
+  },
+  {
+    id: 19,
+    name: 'Non-Admin MoMo Withdrawal Order Amount Mutation',
+    operation: 'update',
+    path: 'momo_withdrawal_orders/NH24-OWN-MOMO01',
+    auth: { uid: 'user_a', email: 'a@example.com', email_verified: true },
+    payload: { amountUsd: 50000, status: 'Disbursed' },
+    expectedResult: 'PERMISSION_DENIED',
+  },
 ];

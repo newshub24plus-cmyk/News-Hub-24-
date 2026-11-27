@@ -8,11 +8,17 @@ import {
   Globe,
   HelpCircle,
   Lightbulb,
+  Pause,
+  Play,
   Share2,
+  SkipBack,
+  SkipForward,
+  Square,
   ThumbsUp,
+  Volume2,
   X
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { NewsArticle } from '../data/newsData';
 import { calculateEstimatedReadTime } from '../utils/readingTime';
 import { EditorialImage } from './EditorialImage';
@@ -62,6 +68,197 @@ export function ArticleModal({
   const [readingProgress, setReadingProgress] = useState(0);
   const scrollBodyRef = useRef<HTMLDivElement | null>(null);
 
+  // Web Speech API ('Listen to Article') state
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const [speechStatus, setSpeechStatus] = useState<'idle' | 'playing' | 'paused'>('idle');
+  const [speechVoices, setSpeechVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoiceUri, setSelectedVoiceUri] = useState<string>('');
+  const [speechRate, setSpeechRate] = useState<number>(1);
+  const [activeSegmentIndex, setActiveSegmentIndex] = useState<number>(-1);
+  const [speechError, setSpeechError] = useState<string | null>(null);
+  const speechSessionRef = useRef<number>(0);
+  const activeSegmentRef = useRef<number>(-1);
+  const speechRateRef = useRef<number>(1);
+  const selectedVoiceUriRef = useRef<string>('');
+  const speechVoicesRef = useRef<SpeechSynthesisVoice[]>([]);
+
+  useEffect(() => {
+    speechRateRef.current = speechRate;
+  }, [speechRate]);
+
+  useEffect(() => {
+    selectedVoiceUriRef.current = selectedVoiceUri;
+  }, [selectedVoiceUri]);
+
+  useEffect(() => {
+    speechVoicesRef.current = speechVoices;
+  }, [speechVoices]);
+
+  const speechSegments = useMemo(() => {
+    if (!article) return [];
+    const list: Array<{ label: string; text: string; paragraphIndex: number | null }> = [
+      {
+        label: 'Headline & Summary',
+        text: `${article.title}. ${article.deck}. By ${article.author}.`,
+        paragraphIndex: null
+      },
+      ...article.paragraphs.map((p, idx) => ({
+        label: `Paragraph ${idx + 1} of ${article.paragraphs.length}`,
+        text: p,
+        paragraphIndex: idx
+      }))
+    ];
+    if (article.pullQuote) {
+      list.push({
+        label: 'Featured Quote',
+        text: `Featured quote: ${article.pullQuote}`,
+        paragraphIndex: null
+      });
+    }
+    return list;
+  }, [article]);
+
+  const stopSpeech = useCallback(() => {
+    speechSessionRef.current += 1;
+    activeSegmentRef.current = -1;
+    setSpeechStatus('idle');
+    setActiveSegmentIndex(-1);
+    setSpeechError(null);
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // Ignore browser cancel edge cases
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
+      setSpeechSupported(false);
+      return;
+    }
+    setSpeechSupported(true);
+
+    const loadVoices = () => {
+      try {
+        const list = window.speechSynthesis.getVoices();
+        if (list.length > 0) {
+          setSpeechVoices(list);
+          setSelectedVoiceUri((prev) => {
+            if (prev && list.some((v) => v.voiceURI === prev)) return prev;
+            const preferred =
+              list.find((v) => v.default && v.lang.toLowerCase().startsWith('en')) ??
+              list.find((v) => v.lang.toLowerCase().startsWith('en')) ??
+              list[0];
+            return preferred?.voiceURI ?? '';
+          });
+        }
+      } catch {
+        // Ignore voice enumeration errors
+      }
+    };
+
+    loadVoices();
+    window.speechSynthesis.addEventListener?.('voiceschanged', loadVoices);
+    return () => {
+      window.speechSynthesis.removeEventListener?.('voiceschanged', loadVoices);
+    };
+  }, []);
+
+  const speakSegmentAt = useCallback(
+    (index: number) => {
+      if (!article || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+      if (index < 0 || index >= speechSegments.length) {
+        stopSpeech();
+        return;
+      }
+
+      const sessionId = speechSessionRef.current + 1;
+      speechSessionRef.current = sessionId;
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // Ignore cancel failures
+      }
+
+      const segment = speechSegments[index];
+      const utterance = new SpeechSynthesisUtterance(segment.text);
+      utterance.rate = speechRateRef.current;
+      const chosenVoice = speechVoicesRef.current.find(
+        (v) => v.voiceURI === selectedVoiceUriRef.current
+      );
+      if (chosenVoice) {
+        utterance.voice = chosenVoice;
+        utterance.lang = chosenVoice.lang;
+      } else {
+        utterance.lang = 'en-US';
+      }
+
+      activeSegmentRef.current = index;
+      setActiveSegmentIndex(index);
+      setSpeechStatus('playing');
+      setSpeechError(null);
+
+      utterance.onend = () => {
+        if (speechSessionRef.current !== sessionId) return;
+        if (index + 1 < speechSegments.length) {
+          speakSegmentAt(index + 1);
+        } else {
+          speechSessionRef.current += 1;
+          activeSegmentRef.current = -1;
+          setSpeechStatus('idle');
+          setActiveSegmentIndex(-1);
+        }
+      };
+
+      utterance.onerror = (event) => {
+        if (speechSessionRef.current !== sessionId) return;
+        const errCode = (event as SpeechSynthesisErrorEvent).error;
+        if (errCode === 'interrupted' || errCode === 'canceled') return;
+        setSpeechStatus('idle');
+        setActiveSegmentIndex(-1);
+        activeSegmentRef.current = -1;
+        setSpeechError('Browser speech synthesis could not play audio on this device.');
+      };
+
+      window.speechSynthesis.speak(utterance);
+    },
+    [article, speechSegments, stopSpeech]
+  );
+
+  const handleToggleListen = useCallback(() => {
+    if (!speechSupported || typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      setSpeechError('Text-to-speech is not supported in this browser.');
+      return;
+    }
+    if (speechStatus === 'playing') {
+      try {
+        window.speechSynthesis.pause();
+        setSpeechStatus('paused');
+      } catch {
+        stopSpeech();
+      }
+      return;
+    }
+    if (speechStatus === 'paused') {
+      try {
+        if (window.speechSynthesis.paused) {
+          window.speechSynthesis.resume();
+          setSpeechStatus('playing');
+        } else {
+          const resumeIdx = activeSegmentRef.current >= 0 ? activeSegmentRef.current : 0;
+          speakSegmentAt(resumeIdx);
+        }
+      } catch {
+        const resumeIdx = activeSegmentRef.current >= 0 ? activeSegmentRef.current : 0;
+        speakSegmentAt(resumeIdx);
+      }
+      return;
+    }
+    speakSegmentAt(0);
+  }, [speakSegmentAt, speechStatus, speechSupported, stopSpeech]);
+
   useEffect(() => {
     if (!article) return;
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -86,6 +283,7 @@ export function ArticleModal({
   };
 
   useEffect(() => {
+    stopSpeech();
     if (!article) return;
     const el = scrollBodyRef.current;
     if (el) {
@@ -97,10 +295,11 @@ export function ArticleModal({
     });
     window.addEventListener('resize', updateScrollProgress);
     return () => {
+      stopSpeech();
       window.cancelAnimationFrame(rafId);
       window.removeEventListener('resize', updateScrollProgress);
     };
-  }, [article?.id]);
+  }, [article?.id, stopSpeech]);
 
   useEffect(() => {
     if (!article || !onReadingEngage) return;
@@ -185,6 +384,33 @@ export function ArticleModal({
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleToggleListen}
+              disabled={!speechSupported}
+              aria-pressed={speechStatus !== 'idle'}
+              title={speechSupported ? 'Listen to this article read aloud' : 'Web Speech API unavailable in this browser'}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-[#991B1B] disabled:opacity-50 ${
+                speechStatus !== 'idle'
+                  ? 'text-white bg-[#991B1B] border-[#991B1B] hover:bg-[#7F1D1D] dark:bg-[#DC2626] dark:border-[#DC2626]'
+                  : 'text-[#292524] dark:text-[#F5F3EE] bg-white dark:bg-[#242320] border-[#D6D1C7] dark:border-[#3A3732] hover:bg-[#F5F2EB] dark:hover:bg-[#2E2C28]'
+              }`}
+            >
+              {speechStatus === 'playing' ? (
+                <Pause className="w-3.5 h-3.5" />
+              ) : speechStatus === 'paused' ? (
+                <Play className="w-3.5 h-3.5" />
+              ) : (
+                <Volume2 className="w-3.5 h-3.5" />
+              )}
+              <span>
+                {speechStatus === 'playing'
+                  ? 'Pause Audio'
+                  : speechStatus === 'paused'
+                    ? 'Resume Audio'
+                    : 'Listen to Article'}
+              </span>
+            </button>
             {onToggleSave && (
               <button
                 type="button"
@@ -261,6 +487,113 @@ export function ArticleModal({
             </time>
           </div>
 
+          {/* Inline Listen to Article Web Speech Audio Bar */}
+          {(speechStatus !== 'idle' || speechError) && (
+            <div
+              role="region"
+              aria-label="Audio article reader controls"
+              className="mb-6 p-3.5 bg-[#F5F2EB] dark:bg-[#1C1B19] border border-[#DFDBD2] dark:border-[#2E2C28] rounded-md flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Volume2 className="w-4 h-4 text-[#991B1B] dark:text-[#F87171] shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-[#141413] dark:text-[#F5F3EE] truncate">
+                    {speechError
+                      ? speechError
+                      : speechStatus === 'paused'
+                        ? `Paused · ${speechSegments[activeSegmentIndex]?.label ?? 'Audio Ready'}`
+                        : `Reading Aloud · ${speechSegments[activeSegmentIndex]?.label ?? 'Starting…'}`}
+                  </p>
+                  {!speechError && (
+                    <p className="font-mono text-[11px] text-[#57534E] dark:text-[#A8A29E] tabular-nums">
+                      Segment {Math.max(1, activeSegmentIndex + 1)} of {speechSegments.length} · Speed {speechRate}x
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => speakSegmentAt(Math.max(0, activeSegmentIndex - 1))}
+                  disabled={activeSegmentIndex <= 0}
+                  aria-label="Previous section"
+                  className="p-1.5 text-[#141413] dark:text-[#F5F3EE] bg-white dark:bg-[#242320] border border-[#D6D1C7] dark:border-[#3A3732] rounded disabled:opacity-40"
+                >
+                  <SkipBack className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleToggleListen}
+                  aria-label={speechStatus === 'playing' ? 'Pause audio' : 'Resume audio'}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-white bg-[#991B1B] hover:bg-[#7F1D1D] dark:bg-[#DC2626] rounded"
+                >
+                  {speechStatus === 'playing' ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                  <span>{speechStatus === 'playing' ? 'Pause' : 'Resume'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => speakSegmentAt(Math.min(speechSegments.length - 1, activeSegmentIndex + 1))}
+                  disabled={activeSegmentIndex >= speechSegments.length - 1}
+                  aria-label="Next section"
+                  className="p-1.5 text-[#141413] dark:text-[#F5F3EE] bg-white dark:bg-[#242320] border border-[#D6D1C7] dark:border-[#3A3732] rounded disabled:opacity-40"
+                >
+                  <SkipForward className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={stopSpeech}
+                  aria-label="Stop reading"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-[#292524] dark:text-[#F5F3EE] bg-white dark:bg-[#242320] border border-[#D6D1C7] dark:border-[#3A3732] rounded hover:border-[#991B1B]"
+                >
+                  <Square className="w-3 h-3" />
+                  <span>Stop</span>
+                </button>
+
+                <select
+                  aria-label="Reading speed"
+                  value={speechRate}
+                  onChange={(e) => {
+                    const nextRate = Number(e.target.value) || 1;
+                    setSpeechRate(nextRate);
+                    speechRateRef.current = nextRate;
+                    if (speechStatus !== 'idle' && activeSegmentRef.current >= 0) {
+                      speakSegmentAt(activeSegmentRef.current);
+                    }
+                  }}
+                  className="px-2 py-1 text-[11px] font-mono bg-white dark:bg-[#242320] border border-[#D6D1C7] dark:border-[#3A3732] rounded text-[#141413] dark:text-[#F5F3EE]"
+                >
+                  <option value={0.9}>0.9x</option>
+                  <option value={1}>1.0x</option>
+                  <option value={1.25}>1.25x</option>
+                  <option value={1.5}>1.5x</option>
+                </select>
+
+                {speechVoices.length > 0 && (
+                  <select
+                    aria-label="Narrator voice"
+                    value={selectedVoiceUri}
+                    onChange={(e) => {
+                      const nextUri = e.target.value;
+                      setSelectedVoiceUri(nextUri);
+                      selectedVoiceUriRef.current = nextUri;
+                      if (speechStatus !== 'idle' && activeSegmentRef.current >= 0) {
+                        speakSegmentAt(activeSegmentRef.current);
+                      }
+                    }}
+                    className="max-w-[140px] px-2 py-1 text-[11px] bg-white dark:bg-[#242320] border border-[#D6D1C7] dark:border-[#3A3732] rounded text-[#141413] dark:text-[#F5F3EE] truncate"
+                  >
+                    {speechVoices.slice(0, 20).map((voice) => (
+                      <option key={voice.voiceURI} value={voice.voiceURI}>
+                        {voice.name} ({voice.lang})
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+          )}
+
           {article.imageKey && (
             <figure className="mb-8">
               <div className="overflow-hidden rounded-md border border-[#E5E2DC] dark:border-[#2C2A26] bg-[#EFECE6] dark:bg-[#1F1E1B]">
@@ -279,18 +612,27 @@ export function ArticleModal({
           )}
 
           <div className="max-w-prose space-y-5 text-[16px] text-[#292524] dark:text-[#E5E2DC] leading-[1.78]">
-            {article.paragraphs.map((paragraph, index) => (
-              <p
-                key={index}
-                className={
-                  index === 0
-                    ? 'first-letter:text-5xl first-letter:font-serif first-letter:font-bold first-letter:float-left first-letter:mr-3 first-letter:mt-1 first-letter:leading-none first-letter:text-[#141413] dark:first-letter:text-[#F5F3EE]'
-                    : ''
-                }
-              >
-                {paragraph}
-              </p>
-            ))}
+            {article.paragraphs.map((paragraph, index) => {
+              const isBeingSpoken =
+                speechStatus !== 'idle' &&
+                speechSegments[activeSegmentIndex]?.paragraphIndex === index;
+              return (
+                <p
+                  key={index}
+                  className={`${
+                    index === 0
+                      ? 'first-letter:text-5xl first-letter:font-serif first-letter:font-bold first-letter:float-left first-letter:mr-3 first-letter:mt-1 first-letter:leading-none first-letter:text-[#141413] dark:first-letter:text-[#F5F3EE]'
+                      : ''
+                  } ${
+                    isBeingSpoken
+                      ? 'bg-[#FEF2F2] dark:bg-[#2A1515]/60 border-l-2 border-[#991B1B] dark:border-[#F87171] pl-3 py-1 rounded-r transition-colors'
+                      : ''
+                  }`}
+                >
+                  {paragraph}
+                </p>
+              );
+            })}
           </div>
 
           {article.pullQuote && (

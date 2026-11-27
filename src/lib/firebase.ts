@@ -1316,5 +1316,175 @@ export async function loadMotherAppRevenueEventsFromFirestore(
   }
 }
 
+// ==========================================
+// 11. VERIFIABLE SHA-256 LEDGER & MTN MOMO WITHDRAWAL ORDERS
+// ==========================================
+
+export interface VerifiableLedgerRecordFirestore {
+  id: string;
+  ownerUid: string;
+  seq: number;
+  recordType:
+    | 'GENESIS_VERIFIED_OPENING'
+    | 'REVENUE_CREDIT'
+    | 'CREATOR_EARNINGS_CLAIM'
+    | 'AIRTIME_CONVERSION'
+    | 'MOMO_WITHDRAWAL'
+    | 'PAYOUT_WITHDRAWAL'
+    | 'WITHDRAWAL_REVERSAL'
+    | 'LEDGER_RECONCILIATION';
+  rail: string;
+  networkCode: string;
+  accountMasked: string;
+  amountUsd: number;
+  deltaUsd: number;
+  amountLocal?: number;
+  currencyLocal?: string;
+  balanceBeforeUsd: number;
+  balanceAfterUsd: number;
+  referenceId: string;
+  settlementMode: 'live_configured' | 'live_treasury_ledger';
+  note: string;
+  prevHash: string;
+  recordHash: string;
+  createdAt?: Timestamp | string;
+}
+
+export interface MomoWithdrawalOrderFirestore {
+  id: string;
+  ownerUid: string;
+  destinationLabel: string;
+  maskedAccount: string;
+  networkCode: string;
+  currency: string;
+  amountUsd: number;
+  feeUsd: number;
+  netSettledUsd: number;
+  amountGhs: number;
+  settlementMode: 'live_configured' | 'live_treasury_ledger';
+  settlementReference: string;
+  status: 'Disbursed' | 'Processing (1-2 Business Days)' | 'Reversed';
+  verifiableRecordHash: string;
+  note: string;
+  createdAt?: Timestamp | string;
+  updatedAt?: Timestamp | string;
+}
+
+const SHA256_HEX_REGEX = /^[a-f0-9]{64}$/;
+
+export async function syncVerifiableRecordToFirestore(
+  user: User,
+  rec: Omit<VerifiableLedgerRecordFirestore, 'ownerUid' | 'createdAt'>
+): Promise<boolean> {
+  if (!user.emailVerified) return false;
+  if (!SHA256_HEX_REGEX.test(rec.prevHash) || !SHA256_HEX_REGEX.test(rec.recordHash)) {
+    return false;
+  }
+  const docId = sanitizeDocId(rec.id, 'vdb');
+  const path = `verifiable_ledger_records/${docId}`;
+  const docRef = doc(db, 'verifiable_ledger_records', docId);
+  try {
+    const existing = await getDoc(docRef);
+    if (existing.exists()) return true;
+    await setDoc(docRef, {
+      id: docId,
+      ownerUid: user.uid,
+      seq: Math.max(1, Math.min(10000000, Math.round(rec.seq))),
+      recordType: rec.recordType,
+      rail: clampStr(rec.rail, 64, 'live_treasury'),
+      networkCode: clampStr(rec.networkCode, 32, 'MTN'),
+      accountMasked: clampStr(rec.accountMasked, 80, '•••• 1975'),
+      amountUsd: Math.max(0, Math.min(10000000, Number(rec.amountUsd.toFixed(2)))),
+      deltaUsd: Math.max(-10000000, Math.min(10000000, Number(rec.deltaUsd.toFixed(2)))),
+      ...(typeof rec.amountLocal === 'number' && Number.isFinite(rec.amountLocal)
+        ? { amountLocal: Math.max(0, Math.min(500000000, Number(rec.amountLocal.toFixed(2)))) }
+        : {}),
+      ...(rec.currencyLocal ? { currencyLocal: clampStr(rec.currencyLocal, 8, 'GHS') } : {}),
+      balanceBeforeUsd: Math.max(0, Math.min(100000000, Number(rec.balanceBeforeUsd.toFixed(2)))),
+      balanceAfterUsd: Math.max(0, Math.min(100000000, Number(rec.balanceAfterUsd.toFixed(2)))),
+      referenceId: clampStr(rec.referenceId, 128, docId),
+      settlementMode: rec.settlementMode,
+      note: clampStr(rec.note, 240, 'Verified live production entry'),
+      prevHash: rec.prevHash,
+      recordHash: rec.recordHash,
+      createdAt: serverTimestamp()
+    });
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function syncMomoWithdrawalOrderToFirestore(
+  user: User,
+  order: Omit<MomoWithdrawalOrderFirestore, 'ownerUid' | 'createdAt' | 'updatedAt'>
+): Promise<boolean> {
+  if (!user.emailVerified) return false;
+  if (!SHA256_HEX_REGEX.test(order.verifiableRecordHash)) {
+    return false;
+  }
+  const docId = sanitizeDocId(order.id, 'momo');
+  const path = `momo_withdrawal_orders/${docId}`;
+  const docRef = doc(db, 'momo_withdrawal_orders', docId);
+  try {
+    const existing = await getDoc(docRef);
+    const amountUsd = Math.max(0.01, Math.min(1000000, Number(order.amountUsd.toFixed(2))));
+    const feeUsd = Math.max(0, Math.min(50000, Number(order.feeUsd.toFixed(2))));
+    const netSettledUsd = Math.max(0.01, Math.min(amountUsd, Number(order.netSettledUsd.toFixed(2))));
+    if (existing.exists()) {
+      return true;
+    }
+    await setDoc(docRef, {
+      id: docId,
+      ownerUid: user.uid,
+      destinationLabel: clampStr(order.destinationLabel, 120, 'MTN MoMo Ghana'),
+      maskedAccount: clampStr(order.maskedAccount, 64, '•••• 1975'),
+      networkCode: clampStr(order.networkCode, 32, 'MTN'),
+      currency: clampStr(order.currency, 8, 'GHS'),
+      amountUsd,
+      feeUsd,
+      netSettledUsd,
+      amountGhs: Math.max(0, Math.min(100000000, Number(order.amountGhs.toFixed(2)))),
+      settlementMode: order.settlementMode,
+      settlementReference: clampStr(order.settlementReference, 128, docId),
+      status: order.status,
+      verifiableRecordHash: order.verifiableRecordHash,
+      note: clampStr(order.note, 240, 'Express MTN MoMo withdrawal'),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    });
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function loadVerifiableRecordsFromFirestore(
+  uid: string
+): Promise<VerifiableLedgerRecordFirestore[]> {
+  const path = 'verifiable_ledger_records';
+  try {
+    const q = query(collection(db, path), where('ownerUid', '==', uid), limit(50));
+    const snap = await getDocs(q);
+    const rows = snap.docs.map((d) => {
+      const raw = d.data() as VerifiableLedgerRecordFirestore;
+      const createdIso =
+        raw.createdAt && typeof raw.createdAt === 'object' && 'toDate' in raw.createdAt
+          ? raw.createdAt.toDate().toISOString()
+          : typeof raw.createdAt === 'string'
+            ? raw.createdAt
+            : new Date().toISOString();
+      return {
+        ...raw,
+        createdAt: createdIso
+      };
+    });
+    rows.sort((a, b) => b.seq - a.seq);
+    return rows;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
 
 

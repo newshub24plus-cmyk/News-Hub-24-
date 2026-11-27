@@ -1,0 +1,76 @@
+{
+  "blockedAttacksCount": 0,
+  "quarantinedFilesCount": 0,
+  "rateLimitedCount": 0,
+  "sanitizedPayloadsCount": 0,
+  "scansExecutedCount": 2,
+  "lastApkAudit": {
+    "filename": "NewsHub24Plus-v2.4.0.apk",
+    "packageId": "com.newshub24plus.android",
+    "actualSha256": "15d38bd393de41b4efe6e8e8a227059e0f4a11d4925214856b4afde1377b0cd4",
+    "expectedSha256": "15d38bd393de41b4efe6e8e8a227059e0f4a11d4925214856b4afde1377b0cd4",
+    "sha256Match": true,
+    "dexHeaderValid": true,
+    "manifestVerified": true,
+    "entriesAudited": [
+      {
+        "name": "AndroidManifest.xml",
+        "declaredDigest": "rgPLt6wgv5GGzKXH8Cj5aaaGS24pL9OAz1gUyz48U/g=",
+        "computedDigest": "rgPLt6wgv5GGzKXH8Cj5aaaGS24pL9OAz1gUyz48U/g=",
+        "match": true
+      },
+      {
+        "name": "res/values/strings.xml",
+        "declaredDigest": "e54NYZNMXoZuwxRtRl/3tBsDcRpcfOFYW8cOjGkxaIo=",
+        "computedDigest": "e54NYZNMXoZuwxRtRl/3tBsDcRpcfOFYW8cOjGkxaIo=",
+        "match": true
+      },
+      {
+        "name": "assets/agency_config.json",
+        "declaredDigest": "wecgszEQMDj2qQiRnXztuy3e74VvAFp8fNVTZpL64R8=",
+        "computedDigest": "wecgszEQMDj2qQiRnXztuy3e74VvAFp8fNVTZpL64R8=",
+        "match": true
+      },
+      {
+        "name": "classes.dex",
+        "declaredDigest": "3ZM270mC4241S64deOJP5UT8tGiejVT4Z+IKjwF7N0g=",
+        "computedDigest": "3ZM270mC4241S64deOJP5UT8tGiejVT4Z+IKjwF7N0g=",
+        "match": true
+      }
+    ],
+    "permissionsDetected": [
+      "android.permission.INTERNET",
+      "android.permission.ACCESS_NETWORK_STATE"
+    ],
+    "disallowedPermissionsFound": [],
+    "malwareScanClean": true,
+    "verdict": "Verified Clean",
+    "auditedAt": "2026-11-26T14:44:05.671Z"
+  },
+  "incidents": [
+    {
+      "id": "SEC-O6NLW-GOL",
+      "timestamp": "2026-11-26T14:50:49.988Z",
+      "layer": "Malware Scanner",
+      "severity": "Info",
+      "category": "On-Demand Security Scan",
+      "ruleMatched": "Full Signature & Heuristic Scan",
+      "targetPath": "dispatch.txt",
+      "clientIpMasked": "154.162.x.x",
+      "actionTaken": "Verified Clean",
+      "details": "Scanned 56 bytes against executable headers, EICAR, web shells, and injection signatures — zero threats found."
+    },
+    {
+      "id": "SEC-O6M2V-0C4",
+      "timestamp": "2026-11-26T14:50:48.007Z",
+      "layer": "Malware Scanner",
+      "severity": "Info",
+      "category": "On-Demand Security Scan",
+      "ruleMatched": "Full Signature & Heuristic Scan",
+      "targetPath": "dispatch.txt",
+      "clientIpMasked": "154.162.x.x",
+      "actionTaken": "Verified Clean",
+      "details": "Scanned 56 bytes against executable headers, EICAR, web shells, and injection signatures — zero threats found."
+    }
+  ]
+}

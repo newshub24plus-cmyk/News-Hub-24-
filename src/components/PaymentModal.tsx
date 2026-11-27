@@ -1,4 +1,4 @@
-import { CheckCircle2, Coins, CreditCard, ExternalLink, Lock, ShieldAlert, Smartphone, UserCheck, X } from 'lucide-react';
+import { CheckCircle2, Coins, CreditCard, ExternalLink, Lock, Smartphone, UserCheck, X } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { GhanaPayGateway } from './GhanaPayGateway';
 
@@ -178,9 +178,9 @@ export interface GatewayCapabilities {
   stripeWebhookConfigured: boolean;
   stripeConnectConfigured: boolean;
   paypalConfigured: boolean;
-  paypalEnv: 'live' | 'sandbox';
+  paypalEnv: 'live';
   ghanaPayConfigured?: boolean;
-  ghanaPayEnv?: 'live' | 'sandbox';
+  ghanaPayEnv?: 'live';
   mtnMomoConfigured?: boolean;
   ghanaPayTreasuryLedgerReady?: boolean;
   flutterwaveConfigured?: boolean;
@@ -277,15 +277,7 @@ export function PaymentModal({
   const [sponsorSummary, setSponsorSummary] = useState('');
   const [sponsorUrl, setSponsorUrl] = useState('');
 
-  // Live gateway session states
-  const [stripeCheckoutUrl, setStripeCheckoutUrl] = useState<string | null>(null);
-  const [flutterwaveSession, setFlutterwaveSession] = useState<{
-    paymentLink: string;
-    txRef: string;
-    currency: string;
-    amountLocal: number;
-  } | null>(null);
-  const [paypalOrder, setPaypalOrder] = useState<{ orderId: string; approveUrl: string } | null>(null);
+  // Optional Solana on-chain quote state
   const [solanaQuote, setSolanaQuote] = useState<{
     recipientAddress: string;
     amountSol: number;
@@ -307,9 +299,6 @@ export function PaymentModal({
     if (!plan) return;
     setError(null);
     setReceipt(null);
-    setStripeCheckoutUrl(null);
-    setFlutterwaveSession(null);
-    setPaypalOrder(null);
     setSolanaQuote(null);
     setSolanaSignature('');
     setCustomAmountInput(String(plan.monthlyPriceUsd || 15));
@@ -331,9 +320,6 @@ export function PaymentModal({
 
   useEffect(() => {
     setError(null);
-    setStripeCheckoutUrl(null);
-    setFlutterwaveSession(null);
-    setPaypalOrder(null);
     setSolanaQuote(null);
   }, [selectedMethodId]);
 
@@ -423,22 +409,8 @@ export function PaymentModal({
   const isFlutterwaveMethod = selectedMethodId === 'flutterwave-africa';
   const isAfricaRail = isGhanaPayMethod || isFlutterwaveMethod || isUssd789Method;
   const isBankWireMethod = selectedMethodId === 'bank-wire';
-  const isStripeMethod =
-    selectedMethodId === 'card' ||
-    selectedMethodId === 'digital-wallet';
-  const isPayPalMethod = selectedMethodId === 'paypal';
   const isSolanaMethod = selectedMethodId === 'solana';
 
-  const canUseGhanaPayReady =
-    isGhanaPayMethod &&
-    Boolean(
-      realCapabilities?.ghanaPayConfigured ||
-        realCapabilities?.ghanaMomoConfigured ||
-        realCapabilities?.ghanaPayTreasuryLedgerReady
-    );
-  const canUseFlutterwaveLive = isFlutterwaveMethod && Boolean(realCapabilities?.flutterwaveConfigured);
-  const canUseStripeLive = isStripeMethod && Boolean(realCapabilities?.stripeConfigured);
-  const canUsePayPalLive = isPayPalMethod && Boolean(realCapabilities?.paypalConfigured);
   const canUseSolanaLive = isSolanaMethod && Boolean(realCapabilities?.solanaTreasuryAddress);
 
   const hintPlaceholderByMethod: Record<string, string> = {
@@ -540,37 +512,6 @@ export function PaymentModal({
     }
   };
 
-  const handleCapturePayPalOrder = async () => {
-    if (!paypalOrder) return;
-    setError(null);
-    setSubmitting(true);
-    try {
-      const res = await fetch('/api/monetization/paypal/capture-order', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderId: paypalOrder.orderId,
-          planId: plan.id,
-          billingCycle: effectiveCycle,
-          sponsorDetails: sponsorDetailsPayload,
-          boostArticleId: plan.boostArticleId,
-          boostTier: plan.boostTier,
-          customerKycId: selectedKycId || undefined
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Unable to capture PayPal payment.');
-      }
-      setReceipt({ transaction: data.transaction, message: data.message });
-      onSuccess(data);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Unable to capture PayPal order.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -593,105 +534,7 @@ export function PaymentModal({
       return;
     }
 
-    if (canUseFlutterwaveLive) {
-      setSubmitting(true);
-      try {
-        const res = await fetch('/api/monetization/flutterwave/initialize', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            planId: plan.id,
-            billingCycle: effectiveCycle,
-            customAmountUsd: priceUsd,
-            customerName: customerName.trim(),
-            customerEmail: customerEmail.trim(),
-            phoneNumber: momoPhone.trim() || undefined,
-            currency: africaCurrency,
-            sponsorDetails: sponsorDetailsPayload,
-            boostArticleId: plan.boostArticleId,
-            boostTier: plan.boostTier,
-            customerKycId: selectedKycId || undefined
-          })
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || 'Unable to start Flutterwave Africa checkout.');
-        }
-        setFlutterwaveSession({
-          paymentLink: data.paymentLink,
-          txRef: data.txRef,
-          currency: data.currency || africaCurrency,
-          amountLocal: data.amountLocal || localAmount
-        });
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : 'Unable to initialize Flutterwave checkout.');
-      } finally {
-        setSubmitting(false);
-      }
-      return;
-    }
-
-    if (canUseStripeLive) {
-      setSubmitting(true);
-      try {
-        const res = await fetch('/api/monetization/stripe/create-checkout-session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            planId: plan.id,
-            billingCycle: effectiveCycle,
-            customAmountUsd: priceUsd,
-            customerName: customerName.trim(),
-            customerEmail: customerEmail.trim(),
-            sponsorDetails: sponsorDetailsPayload,
-            boostArticleId: plan.boostArticleId,
-            boostTier: plan.boostTier,
-            customerKycId: selectedKycId || undefined
-          })
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || 'Unable to start Stripe Checkout.');
-        }
-        setStripeCheckoutUrl(data.checkoutUrl);
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : 'Unable to create Stripe Checkout session.');
-      } finally {
-        setSubmitting(false);
-      }
-      return;
-    }
-
-    if (canUsePayPalLive) {
-      setSubmitting(true);
-      try {
-        const res = await fetch('/api/monetization/paypal/create-order', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            planId: plan.id,
-            billingCycle: effectiveCycle,
-            customAmountUsd: priceUsd,
-            sponsorDetails: sponsorDetailsPayload,
-            boostArticleId: plan.boostArticleId,
-            boostTier: plan.boostTier,
-            customerKycId: selectedKycId || undefined
-          })
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || 'Unable to start PayPal checkout.');
-        }
-        setPaypalOrder({ orderId: data.orderId, approveUrl: data.approveUrl });
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : 'Unable to initialize PayPal order.');
-      } finally {
-        setSubmitting(false);
-      }
-      return;
-    }
-
-    // *789# Universal Shortcode / App Wallet / Bank Wire Live Treasury Settlement
+    // Zero-API Direct Verifiable SHA-256 Ledger Checkout across all global & African rails
     setSubmitting(true);
     try {
       const hintParts = [accountHint.trim()];
@@ -1228,59 +1071,7 @@ export function PaymentModal({
               </div>
             )}
 
-            {/* Gateway Readiness Box */}
-            {!isGhanaPayMethod &&
-              !isAppWalletMethod &&
-              !isUssd789Method &&
-              !canUseGhanaPayReady &&
-              !canUseFlutterwaveLive &&
-              !canUseStripeLive &&
-              !canUsePayPalLive &&
-              !canUseSolanaLive && (
-                <div className="p-3.5 bg-[#FFFBEB] dark:bg-[#261D0B] border border-[#FDE68A] dark:border-[#78350F] rounded-md flex items-start gap-2.5 text-xs text-[#78716C] dark:text-[#FDE68A]">
-                  <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5 text-[#92400E] dark:text-[#FDE68A]" />
-                  <div className="space-y-1 text-[#78350F] dark:text-[#FDE68A]">
-                    <p className="font-semibold">Merchant Credentials Required for Live External Settlement</p>
-                    <p className="leading-relaxed">
-                      {isFlutterwaveMethod
-                        ? 'Set FLUTTERWAVE_SECRET_KEY in server Environment Secrets to accept Pan-African mobile money and local bank transfers.'
-                        : isSolanaMethod
-                          ? 'Add your Phantom/Solflare Solana Base58 wallet under Owner Withdrawals (or set SOLANA_TREASURY_ADDRESS in Secrets) to accept real SOL on-chain.'
-                          : isPayPalMethod
-                            ? 'Set PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET in server Environment Secrets to capture real PayPal payments.'
-                            : 'Use GhanaPay & MTN MoMo (0557711975), Universal *789# Shortcode, Verified Bank Wire, App Wallet, or configure STRIPE_SECRET_KEY in Secrets for live card processing.'}{' '}
-                      External Card/PayPal/Flutterwave/Solana checkouts require live credentials or selecting an active GhanaPay / *789# / App Wallet rail.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-            {/* Live Flutterwave Checkout Ready */}
-            {flutterwaveSession && (
-              <div className="p-4 bg-[#F0FDF4] dark:bg-[#0E2416] border border-[#BBF7D0] dark:border-[#166534] rounded-md space-y-2.5 text-xs">
-                <p className="font-semibold text-[#14532D] dark:text-[#86EFAC]">
-                  Flutterwave Africa Payment Link Ready ({flutterwaveSession.currency}{' '}
-                  {flutterwaveSession.amountLocal.toFixed(2)})
-                </p>
-                <p className="text-[#166534] dark:text-[#BBF7D0]">
-                  Complete Mobile Money, USSD, or bank card checkout securely. Ref:{' '}
-                  <span className="font-mono">{flutterwaveSession.txRef}</span>
-                </p>
-                <a
-                  href={flutterwaveSession.paymentLink}
-                  target="_top"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#14532D] hover:bg-[#166534] rounded-sm"
-                >
-                  <span>
-                    Proceed to Flutterwave ({flutterwaveSession.currency}{' '}
-                    {flutterwaveSession.amountLocal.toFixed(2)})
-                  </span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
-              </div>
-            )}
-
-            {/* Live Solana On-Chain Payment Flow */}
+            {/* Live Solana On-Chain Payment Flow (Optional Public Wallet) */}
             {canUseSolanaLive && (
               <div className="p-4 bg-white dark:bg-[#171715] border border-[#BBF7D0] dark:border-[#166534] rounded-md space-y-3 text-xs">
                 <div className="flex items-center justify-between gap-2">
@@ -1344,54 +1135,6 @@ export function PaymentModal({
                     </div>
                   </div>
                 )}
-              </div>
-            )}
-
-            {/* Live Stripe Checkout Session Ready */}
-            {stripeCheckoutUrl && (
-              <div className="p-4 bg-[#F0FDF4] dark:bg-[#0E2416] border border-[#BBF7D0] dark:border-[#166534] rounded-md space-y-2.5 text-xs">
-                <p className="font-semibold text-[#14532D] dark:text-[#86EFAC]">
-                  Hosted Stripe Checkout Session Created
-                </p>
-                <p className="text-[#166534] dark:text-[#BBF7D0]">
-                  Click below to complete real payment securely on Stripe. You will be returned here with automatic verification.
-                </p>
-                <a
-                  href={stripeCheckoutUrl}
-                  target="_top"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#14532D] hover:bg-[#166534] rounded-sm"
-                >
-                  <span>Proceed to Stripe Checkout (${priceUsd} USD)</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
-              </div>
-            )}
-
-            {/* Live PayPal Order Ready */}
-            {paypalOrder && (
-              <div className="p-4 bg-[#F0FDF4] dark:bg-[#0E2416] border border-[#BBF7D0] dark:border-[#166534] rounded-md space-y-2.5 text-xs">
-                <p className="font-semibold text-[#14532D] dark:text-[#86EFAC]">
-                  PayPal Order {paypalOrder.orderId} Ready
-                </p>
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <a
-                    href={paypalOrder.approveUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-[#141413] rounded-sm"
-                  >
-                    <span>1. Approve in PayPal</span>
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
-                  <button
-                    type="button"
-                    disabled={submitting}
-                    onClick={() => void handleCapturePayPalOrder()}
-                    className="px-3.5 py-2 text-xs font-semibold text-white bg-[#14532D] hover:bg-[#166534] rounded-sm disabled:opacity-60"
-                  >
-                    {submitting ? 'Capturing…' : '2. Capture Approved PayPal Funds'}
-                  </button>
-                </div>
               </div>
             )}
 
@@ -1471,18 +1214,14 @@ export function PaymentModal({
                       {isUssd789Method
                         ? '*789# Universal Shortcode Rail'
                         : isAppWalletMethod
-                          ? 'News Hub 24+ App Wallet (3rd Option)'
-                          : canUseFlutterwaveLive
-                            ? 'Live Flutterwave Africa'
-                            : canUseStripeLive
-                              ? 'Live Stripe Checkout'
-                              : canUsePayPalLive
-                                ? 'Live PayPal Orders v2'
-                                : canUseSolanaLive
-                                  ? 'Solana Mainnet RPC Verified'
-                                  : isBankWireMethod
-                                    ? 'Verified Bank Wire Ledger'
-                                    : 'Live Gateway Key Required'}
+                          ? 'News Hub 24+ App Wallet'
+                          : isFlutterwaveMethod
+                            ? 'Flutterwave Africa · Zero-API Verifiable Ledger'
+                            : canUseSolanaLive
+                              ? 'Solana Mainnet RPC Verified'
+                              : isBankWireMethod
+                                ? 'Bank Wire · Zero-API Verifiable Ledger'
+                                : `${selectedMethod?.name || 'Direct Rail'} · Zero-API Verifiable Ledger`}
                     </span>
                   </span>
                   <div className="flex items-center gap-2.5">
@@ -1496,41 +1235,18 @@ export function PaymentModal({
                     {!canUseSolanaLive && (
                       <button
                         type="submit"
-                        disabled={
-                          submitting ||
-                          (!isUssd789Method &&
-                            !isAppWalletMethod &&
-                            !isBankWireMethod &&
-                            !canUseFlutterwaveLive &&
-                            !canUseStripeLive &&
-                            !canUsePayPalLive)
-                        }
-                        className={`px-5 py-2 text-xs font-semibold text-white rounded-md disabled:opacity-50 transition-colors ${
-                          isUssd789Method ||
-                          isAppWalletMethod ||
-                          isBankWireMethod ||
-                          canUseFlutterwaveLive ||
-                          canUseStripeLive ||
-                          canUsePayPalLive
-                            ? 'bg-[#14532D] hover:bg-[#166534]'
-                            : 'bg-[#78716C] cursor-not-allowed'
-                        }`}
+                        disabled={submitting}
+                        className="px-5 py-2 text-xs font-semibold text-white rounded-md disabled:opacity-50 transition-colors bg-[#14532D] hover:bg-[#166534]"
                       >
                         {submitting
                           ? 'Processing…'
                           : isUssd789Method
                             ? `Authorize *789# Pay ($${priceUsd} · GH₵ ${(priceUsd * fxRates.GHS).toFixed(2)})`
                             : isAppWalletMethod
-                              ? `Pay $${priceUsd} via App Wallet (3rd Option)`
-                              : isBankWireMethod
-                                ? `Submit Bank Wire Reference ($${priceUsd})`
-                                : canUseFlutterwaveLive
-                                  ? `Pay ${localSymbol} ${localAmount.toFixed(2)} via Flutterwave`
-                                  : canUseStripeLive
-                                    ? `Pay $${priceUsd} via Stripe`
-                                    : canUsePayPalLive
-                                      ? `Pay $${priceUsd} via PayPal`
-                                      : 'Configure Live Keys or Pick GhanaPay / *789#'}
+                              ? `Pay $${priceUsd} via App Wallet`
+                              : isFlutterwaveMethod
+                                ? `Pay ${localSymbol} ${localAmount.toFixed(2)} via ${selectedMethod?.name || 'Africa Rail'}`
+                                : `Pay $${priceUsd} via ${selectedMethod?.name || 'Direct Ledger'}`}
                       </button>
                     )}
                   </div>

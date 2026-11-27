@@ -1,0 +1,53 @@
+{
+  "youtube": {
+    "subscribers": 0,
+    "publicWatchHours": 0,
+    "longFormViews": 0,
+    "monetizedPlaybacks": 0,
+    "shortsEngagedViews": 0,
+    "premiumWatchMinutes": 0,
+    "activeChannelMembers": 0,
+    "watchPageAdNetUsd": 0,
+    "shortsPoolNetUsd": 0,
+    "membershipsMrrUsd": 0,
+    "superThanksNetUsd": 3.19,
+    "premiumShareNetUsd": 0,
+    "claimedUsd": 0
+  },
+  "tiktok": {
+    "followers": 0,
+    "qualifiedViews60sPlus": 0,
+    "totalWatchSeconds60sPlus": 0,
+    "completedViews60sPlus": 0,
+    "liveGiftCoinsReceived": 0,
+    "diamondsBalance": 0,
+    "seriesSalesCount": 0,
+    "creatorRewardsNetUsd": 0,
+    "liveGiftsDiamondsUsd": 0,
+    "seriesPaywallNetUsd": 0,
+    "sparkAdBoostNetUsd": 0,
+    "claimedUsd": 0
+  },
+  "transactions": [
+    {
+      "id": "NH24-CR-IOJTT",
+      "platform": "youtube",
+      "productType": "youtube_super_thanks",
+      "label": "YouTube Super Thanks ($5.00)",
+      "targetTitle": "News Hub 24+ Creator Studio",
+      "supporterName": "Zero API Supporter",
+      "supporterEmail": "supporter@newshub24plus.com",
+      "grossUsd": 5,
+      "processorFeeUsd": 0.45,
+      "creatorNetUsd": 3.19,
+      "coinsOrStarsCount": 500,
+      "diamondsCredited": 0,
+      "paymentRail": "card",
+      "settlementMode": "live_gateway",
+      "verifiedRealFunds": true,
+      "settlementReference": "GLB-CR-NH24-CR-IOJTT",
+      "createdAt": "2026-11-27T05:04:33.377Z"
+    }
+  ],
+  "claims": []
+}

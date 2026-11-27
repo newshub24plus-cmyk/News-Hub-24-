@@ -2581,6 +2581,7 @@ export default function App() {
         <OwnerWithdrawalSection
           data={ownerPayouts}
           rewardsData={rewardsData}
+          externalRefreshKey={trendsRefreshKey}
           platformUncollectedUsd={platformThresholds?.totals.totalUncollectedAllPlatformsUsd ?? 0}
           platformTotalClicks={platformThresholds?.totals.totalClicks ?? 0}
           platformTotalWatchHours={platformThresholds?.totals.totalWatchHours ?? 0}

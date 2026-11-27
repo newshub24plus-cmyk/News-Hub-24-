@@ -241,6 +241,16 @@ function makeEntryId(prefix: string): string {
   return `TRJ-${prefix}-${Date.now().toString(36).toUpperCase().slice(-5)}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`;
 }
 
+function assertLiveNonSandbox(fields: Array<string | undefined>): void {
+  for (const field of fields) {
+    if (!field) continue;
+    const lower = field.toLowerCase();
+    if (lower.includes('sandbox') || lower.includes('sbx-') || lower.includes('simulated')) {
+      throw new Error('Sandbox and simulated transactions are permanently disabled on Live Production Treasury.');
+    }
+  }
+}
+
 export function recordLiveInflowToTreasury(
   state: TreasuryLedgerState,
   params: {
@@ -255,6 +265,7 @@ export function recordLiveInflowToTreasury(
     description: string;
   }
 ): void {
+  assertLiveNonSandbox([params.referenceId, params.rail, params.description]);
   const grossCents = Math.max(0, toCents(params.grossUsd));
   if (grossCents === 0) return;
 
@@ -373,6 +384,7 @@ export function recordCreatorClaimToTreasury(
     sourceLabel: string;
   }
 ): void {
+  assertLiveNonSandbox([params.referenceId, params.sourceLabel]);
   const claimCents = Math.max(0, toCents(params.amountUsd));
   if (claimCents === 0) return;
 
@@ -418,6 +430,7 @@ export function recordDisbursementToTreasury(
     description: string;
   }
 ): void {
+  assertLiveNonSandbox([params.referenceId, params.rail, params.description]);
   const grossCents = Math.max(0, toCents(params.grossUsd));
   const feeCents = Math.max(0, toCents(params.feeUsd));
   if (grossCents === 0) return;
@@ -429,24 +442,33 @@ export function recordDisbursementToTreasury(
     Math.max(0, toCents(state.accounts.CREATOR_PAYABLE_USD.balanceUsd) - grossCents)
   );
 
-  // Draw from operating cash first, then yield buckets if operating cash is deployed
+  // Draw from GHS float first for MoMo/GHS rails, then operating cash, then remaining yield vaults
   let remainingDrawCents = grossCents;
-  const opCents = toCents(state.accounts.OPERATING_CASH_USD.balanceUsd);
-  const drawFromOp = Math.min(opCents, remainingDrawCents);
-  state.accounts.OPERATING_CASH_USD.balanceUsd = fromCents(opCents - drawFromOp);
-  remainingDrawCents -= drawFromOp;
+  const isGhsOrMomoRail =
+    params.rail === 'ghana_momo' ||
+    params.rail === 'mobile_money' ||
+    params.rail === 'ghanapay_transfer' ||
+    params.rail === 'flutterwave_payout' ||
+    params.currencyLocal === 'GHS';
 
-  if (remainingDrawCents > 0) {
-    const ghsCents = toCents(state.accounts.GHANA_GHS_LIQUIDITY_USD.balanceUsd);
-    const drawFromGhs = Math.min(ghsCents, remainingDrawCents);
-    state.accounts.GHANA_GHS_LIQUIDITY_USD.balanceUsd = fromCents(ghsCents - drawFromGhs);
-    remainingDrawCents -= drawFromGhs;
-  }
-  if (remainingDrawCents > 0) {
-    const tbillCents = toCents(state.accounts.YIELD_TBILL_POOL_USD.balanceUsd);
-    const drawFromTbill = Math.min(tbillCents, remainingDrawCents);
-    state.accounts.YIELD_TBILL_POOL_USD.balanceUsd = fromCents(tbillCents - drawFromTbill);
-    remainingDrawCents -= drawFromTbill;
+  const drawFromAccount = (accountId: TreasuryAccountId) => {
+    if (remainingDrawCents <= 0) return;
+    const balCents = toCents(state.accounts[accountId].balanceUsd);
+    const draw = Math.min(balCents, remainingDrawCents);
+    state.accounts[accountId].balanceUsd = fromCents(balCents - draw);
+    remainingDrawCents -= draw;
+  };
+
+  if (isGhsOrMomoRail) {
+    drawFromAccount('GHANA_GHS_LIQUIDITY_USD');
+    drawFromAccount('OPERATING_CASH_USD');
+    drawFromAccount('YIELD_TBILL_POOL_USD');
+    drawFromAccount('SOLANA_STAKING_VAULT_USD');
+  } else {
+    drawFromAccount('OPERATING_CASH_USD');
+    drawFromAccount('YIELD_TBILL_POOL_USD');
+    drawFromAccount('GHANA_GHS_LIQUIDITY_USD');
+    drawFromAccount('SOLANA_STAKING_VAULT_USD');
   }
 
   state.entries.unshift({

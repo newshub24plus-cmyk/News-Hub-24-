@@ -520,6 +520,89 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function isValidSha256Hex(h) {
+      return h is string && h.size() == 64 && h.matches('^[a-f0-9]{64}$');
+    }
+
+    function isValidVerifiableLedgerRecord(data) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'seq', 'recordType', 'rail', 'networkCode',
+          'accountMasked', 'amountUsd', 'deltaUsd', 'balanceBeforeUsd',
+          'balanceAfterUsd', 'referenceId', 'settlementMode', 'note',
+          'prevHash', 'recordHash', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'seq', 'recordType', 'rail', 'networkCode',
+          'accountMasked', 'amountUsd', 'deltaUsd', 'amountLocal', 'currencyLocal',
+          'balanceBeforeUsd', 'balanceAfterUsd', 'referenceId', 'settlementMode',
+          'note', 'prevHash', 'recordHash', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id.size() >= 4
+        && isValidId(data.ownerUid)
+        && data.seq is number && data.seq >= 1 && data.seq <= 10000000
+        && (
+          data.recordType == 'GENESIS_VERIFIED_OPENING' ||
+          data.recordType == 'REVENUE_CREDIT' ||
+          data.recordType == 'CREATOR_EARNINGS_CLAIM' ||
+          data.recordType == 'AIRTIME_CONVERSION' ||
+          data.recordType == 'MOMO_WITHDRAWAL' ||
+          data.recordType == 'PAYOUT_WITHDRAWAL' ||
+          data.recordType == 'WITHDRAWAL_REVERSAL' ||
+          data.recordType == 'LEDGER_RECONCILIATION'
+        )
+        && data.rail is string && data.rail.size() >= 2 && data.rail.size() <= 64
+        && data.networkCode is string && data.networkCode.size() >= 2 && data.networkCode.size() <= 32
+        && data.accountMasked is string && data.accountMasked.size() >= 2 && data.accountMasked.size() <= 80
+        && data.amountUsd is number && data.amountUsd >= 0 && data.amountUsd <= 10000000
+        && data.deltaUsd is number && data.deltaUsd >= -10000000 && data.deltaUsd <= 10000000
+        && (!('amountLocal' in data) || (data.amountLocal is number && data.amountLocal >= 0 && data.amountLocal <= 500000000))
+        && (!('currencyLocal' in data) || (data.currencyLocal is string && data.currencyLocal.size() >= 3 && data.currencyLocal.size() <= 8))
+        && data.balanceBeforeUsd is number && data.balanceBeforeUsd >= 0 && data.balanceBeforeUsd <= 100000000
+        && data.balanceAfterUsd is number && data.balanceAfterUsd >= 0 && data.balanceAfterUsd <= 100000000
+        && data.referenceId is string && data.referenceId.size() >= 2 && data.referenceId.size() <= 128
+        && (data.settlementMode == 'live_configured' || data.settlementMode == 'live_treasury_ledger')
+        && data.note is string && data.note.size() >= 2 && data.note.size() <= 240
+        && isValidSha256Hex(data.prevHash)
+        && isValidSha256Hex(data.recordHash)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidMomoWithdrawalOrder(data) {
+      return data.keys().hasAll([
+          'id', 'ownerUid', 'destinationLabel', 'maskedAccount', 'networkCode',
+          'currency', 'amountUsd', 'feeUsd', 'netSettledUsd', 'amountGhs',
+          'settlementMode', 'settlementReference', 'status',
+          'verifiableRecordHash', 'note', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'destinationLabel', 'maskedAccount', 'networkCode',
+          'currency', 'amountUsd', 'feeUsd', 'netSettledUsd', 'amountGhs',
+          'settlementMode', 'settlementReference', 'status',
+          'verifiableRecordHash', 'note', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id.size() >= 4
+        && isValidId(data.ownerUid)
+        && data.destinationLabel is string && data.destinationLabel.size() >= 2 && data.destinationLabel.size() <= 120
+        && data.maskedAccount is string && data.maskedAccount.size() >= 2 && data.maskedAccount.size() <= 64
+        && data.networkCode is string && data.networkCode.size() >= 2 && data.networkCode.size() <= 32
+        && data.currency is string && data.currency.size() >= 3 && data.currency.size() <= 8
+        && data.amountUsd is number && data.amountUsd >= 0.01 && data.amountUsd <= 1000000
+        && data.feeUsd is number && data.feeUsd >= 0 && data.feeUsd <= 50000
+        && data.netSettledUsd is number && data.netSettledUsd >= 0.01 && data.netSettledUsd <= data.amountUsd
+        && data.amountGhs is number && data.amountGhs >= 0 && data.amountGhs <= 100000000
+        && (data.settlementMode == 'live_configured' || data.settlementMode == 'live_treasury_ledger')
+        && data.settlementReference is string && data.settlementReference.size() >= 2 && data.settlementReference.size() <= 128
+        && (
+          data.status == 'Disbursed' ||
+          data.status == 'Processing (1-2 Business Days)' ||
+          data.status == 'Reversed'
+        )
+        && isValidSha256Hex(data.verifiableRecordHash)
+        && data.note is string && data.note.size() >= 2 && data.note.size() <= 240
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // -------------------------------------------------------------------------
     // Collection: /admins/{userId}
     // -------------------------------------------------------------------------
@@ -954,6 +1037,56 @@ service cloud.firestore {
         && incoming().ownerUid == request.auth.uid
         && incoming().createdAt == request.time;
       allow update: if false;
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /verifiable_ledger_records/{recordId}
+    // Owner-isolated immutable SHA-256 hash-chained verifiable database records.
+    // -------------------------------------------------------------------------
+    match /verifiable_ledger_records/{recordId} {
+      allow get: if isValidId(recordId)
+        && isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isBootstrapAdmin());
+      allow create: if isVerifiedSignedIn()
+        && isValidId(recordId)
+        && isValidVerifiableLedgerRecord(incoming())
+        && incoming().id == recordId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection: /momo_withdrawal_orders/{withdrawalId}
+    // Owner-isolated MTN MoMo withdrawal receipts linked to SHA-256 hashes.
+    // -------------------------------------------------------------------------
+    match /momo_withdrawal_orders/{withdrawalId} {
+      allow get: if isValidId(withdrawalId)
+        && isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn()
+        && (existing().ownerUid == request.auth.uid || isBootstrapAdmin());
+      allow create: if isVerifiedSignedIn()
+        && isValidId(withdrawalId)
+        && isValidMomoWithdrawalOrder(incoming())
+        && incoming().id == withdrawalId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(withdrawalId)
+        && isValidMomoWithdrawalOrder(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && existing().status != 'Reversed'
+        && incoming().status == 'Reversed'
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
       allow delete: if false;
     }
   }

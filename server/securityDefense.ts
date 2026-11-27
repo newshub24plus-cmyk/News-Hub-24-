@@ -796,7 +796,7 @@ export class SecurityDefenseEngine {
           "font-src 'self' https://fonts.gstatic.com data:",
           "img-src 'self' data: blob: https:",
           "media-src 'self' blob: https:",
-          "connect-src 'self' https://api.coingecko.com https://open.er-api.com https://api.mainnet-beta.solana.com https://api.ghanapay.gh https://*.ghanapay.com.gh https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://api.flutterwave.com https://api-m.paypal.com https://api-m.sandbox.paypal.com https://api.stripe.com ws: wss:",
+          "connect-src 'self' https://api.coingecko.com https://open.er-api.com https://api.mainnet-beta.solana.com https://api.ghanapay.gh https://*.ghanapay.com.gh https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://api.flutterwave.com https://api-m.paypal.com https://api.stripe.com ws: wss:",
           "frame-src 'self' https://*.firebaseapp.com https://accounts.google.com",
           "object-src 'none'",
           "base-uri 'self'",
